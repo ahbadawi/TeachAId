@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: teachaid
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: node node_modules/tsx/dist/cli.mjs server.ts
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ANTHROPIC_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: APP_URL
+        fromService:
+          type: web
+          name: teachaid
+          property: host
+      # WHISPER_URL and KOKORO_URL intentionally omitted —
+      # those run locally on educator's machine, not on Render.
+      # Without them: TTS falls back to browser Web Speech API (fine).
+      # Process Session button requires educator to run local server + Whisper.

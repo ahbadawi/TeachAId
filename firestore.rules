@@ -1,0 +1,99 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() { return request.auth != null; }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/educators/$(request.auth.uid)).data.role == 'Admin' ||
+          (request.auth.token.email == "ashraf.badawi@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isEducator() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/educators/$(request.auth.uid)).data.role in ['Admin', 'Educator'];
+    }
+
+    match /institutions/{institutionId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /educators/{educatorId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() || (isAuthenticated() && request.auth.uid == educatorId && request.resource.data.role == 'Educator');
+      allow update: if isAdmin() || (isAuthenticated() && request.auth.uid == educatorId && request.resource.data.role == resource.data.role);
+    }
+
+    match /courses/{courseId} {
+      allow read: if isAuthenticated();
+      allow write: if isEducator();
+    }
+
+    match /assignments/{assignmentId} {
+      allow read: if true;
+      allow write: if isEducator();
+      match /questions/{questionId} {
+        allow read: if true;
+        allow write: if isEducator();
+      }
+    }
+
+    match /students/{studentId} {
+      allow read: if isAuthenticated();
+      allow write: if isEducator();
+    }
+
+    // ── Student-accessible (unauthenticated — URL token only) ─────────────────
+
+    match /inviteTokens/{tokenId} {
+      allow read: if true;
+      allow create: if isEducator();
+      allow update: if true;
+    }
+
+    match /consentRecords/{recordId} {
+      allow read: if isEducator();
+      allow create: if true;
+    }
+
+    match /interviewSessions/{sessionId} {
+      allow read: if isEducator();
+      allow create: if true;
+      allow update: if true;
+      match /responseChunks/{chunkId} {
+        allow read: if isEducator();
+        allow create: if true;
+        allow update: if isEducator();
+      }
+      match /snapshots/{snapshotId} {
+        allow read: if isEducator();
+        allow create: if true;
+      }
+      match /notes/{noteId} {
+        allow create: if true;
+      }
+    }
+
+    match /analysisReports/{reportId} {
+      allow read: if isAuthenticated();
+      allow create: if true;
+      allow update: if true;
+      match /flags/{flagId} {
+        allow read: if isAuthenticated();
+        allow create: if true;
+      }
+    }
+
+    match /educatorDecisions/{decisionId} {
+      allow read: if isAuthenticated();
+      allow create: if isEducator();
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if true;
+    }
+  }
+}

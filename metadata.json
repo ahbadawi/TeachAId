@@ -1,0 +1,8 @@
+{
+  "name": "Assessment Integrity",
+  "description": "AI-Powered Academic Integrity Interview Platform for verifying student understanding through structured audio interviews.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

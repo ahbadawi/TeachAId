@@ -1,0 +1,216 @@
+{
+  "entities": {
+    "Institution": {
+      "title": "Institution",
+      "description": "An organization that uses TeachAId.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "contactEmail": { "type": "string", "format": "email" },
+        "subscriptionTier": { "type": "string" },
+        "defaultRetentionPolicy": { "type": "object" }
+      },
+      "required": ["name", "contactEmail"]
+    },
+    "Educator": {
+      "title": "Educator",
+      "description": "A user with access to create courses and review reports.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "institutionId": { "type": "string" },
+        "role": { "type": "string", "enum": ["Admin", "Educator", "Observer"] }
+      },
+      "required": ["name", "email", "institutionId", "role"]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "A named course containing assignments.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "educatorId": { "type": "string" },
+        "institutionId": { "type": "string" },
+        "defaultLanguagePair": { "type": "string" },
+        "defaultQuestionCount": { "type": "integer" },
+        "defaultCaptureMode": { "type": "string", "enum": ["Snapshot", "Video"] }
+      },
+      "required": ["name", "educatorId", "institutionId"]
+    },
+    "Assignment": {
+      "title": "Assignment",
+      "description": "A specific assessment event within a course.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "courseId": { "type": "string" },
+        "rubricFileUrl": { "type": "string" },
+        "briefFileUrl": { "type": "string" },
+        "windowOpen": { "type": "string", "format": "date-time" },
+        "windowClose": { "type": "string", "format": "date-time" },
+        "questionCount": { "type": "integer" },
+        "responseTimeLimit": { "type": "integer" },
+        "captureMode": { "type": "string", "enum": ["Snapshot", "Video"] },
+        "status": { "type": "string", "enum": ["Draft", "Processing", "Ready", "Active", "Closed", "Archived"] }
+      },
+      "required": ["title", "courseId", "status"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "A person being assessed.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "studentId": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "institutionId": { "type": "string" }
+      },
+      "required": ["name", "studentId", "institutionId"]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "A student's assessment record for one assignment.",
+      "type": "object",
+      "properties": {
+        "assignmentId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "workFileUrl": { "type": "string" },
+        "extractedText": { "type": "string" },
+        "status": { "type": "string" },
+        "arabicEnabled": { "type": "boolean" }
+      },
+      "required": ["assignmentId", "studentId"]
+    },
+    "InviteToken": {
+      "title": "InviteToken",
+      "description": "A single-use access token for a student.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "assignmentId": { "type": "string" },
+        "tokenHash": { "type": "string" },
+        "expiry": { "type": "string", "format": "date-time" },
+        "usedAt": { "type": "string", "format": "date-time" },
+        "issuedBy": { "type": "string" }
+      },
+      "required": ["studentId", "assignmentId", "tokenHash", "expiry"]
+    },
+    "InterviewSession": {
+      "title": "InterviewSession",
+      "description": "A student's interview session.",
+      "type": "object",
+      "properties": {
+        "submissionId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "status": { "type": "string", "enum": ["NOT_STARTED", "CONSENT_PENDING", "UPLOAD_PENDING", "IN_PROGRESS", "INCOMPLETE", "AWAITING_PROCESSING", "AWAITING_REVIEW", "REVIEWED", "PROCESSING_FAILED", "EXPIRED"] },
+        "currentQuestionIndex": { "type": "integer" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "arabicAudioEnabled": { "type": "boolean" },
+        "disruptionCause": { "type": "string" }
+      },
+      "required": ["submissionId", "studentId", "status"]
+    },
+    "ResponseChunk": {
+      "title": "ResponseChunk",
+      "description": "One recorded answer to one question.",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string" },
+        "questionIndex": { "type": "integer" },
+        "isBranch": { "type": "boolean" },
+        "audioUrl": { "type": "string" },
+        "videoUrl": { "type": "string" },
+        "duration": { "type": "number" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sessionId", "questionIndex"]
+    },
+    "Snapshot": {
+      "title": "Snapshot",
+      "description": "A still image captured during a session.",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string" },
+        "questionIndex": { "type": "integer" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "isSubmissionSnapshot": { "type": "boolean" },
+        "imageUrl": { "type": "string" }
+      },
+      "required": ["sessionId", "timestamp"]
+    },
+    "AnalysisReport": {
+      "title": "AnalysisReport",
+      "description": "The output of the AI post-session analysis.",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string" },
+        "comprehensionLevel": { "type": "string", "enum": ["Low", "Medium", "High"] },
+        "recommendedAction": { "type": "string" },
+        "voiceSimilarityScore": { "type": "number" },
+        "transcriptUrl": { "type": "string" },
+        "generatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sessionId", "comprehensionLevel", "generatedAt"]
+    },
+    "Flag": {
+      "title": "Flag",
+      "description": "A specific observation within an analysis report.",
+      "type": "object",
+      "properties": {
+        "reportId": { "type": "string" },
+        "classification": { "type": "string", "enum": ["Hard Evidence", "Soft Signal", "Data Quality Issue"] },
+        "severity": { "type": "integer" },
+        "description": { "type": "string" },
+        "questionIndex": { "type": "integer" },
+        "responseChunkId": { "type": "string" }
+      },
+      "required": ["reportId", "classification", "description"]
+    },
+    "EducatorDecision": {
+      "title": "EducatorDecision",
+      "description": "The educator's formal decision.",
+      "type": "object",
+      "properties": {
+        "reportId": { "type": "string" },
+        "educatorId": { "type": "string" },
+        "decision": { "type": "string", "enum": ["Accept", "Schedule Follow-up", "Escalate"] },
+        "note": { "type": "string" },
+        "decidedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reportId", "educatorId", "decision", "decidedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "A record of every significant event.",
+      "type": "object",
+      "properties": {
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "eventType": { "type": "string" },
+        "actorType": { "type": "string" },
+        "actorId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "metadata": { "type": "object" }
+      },
+      "required": ["eventType", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/institutions/{institutionId}": { "schema": "Institution", "description": "Institutions" },
+    "/educators/{educatorId}": { "schema": "Educator", "description": "Educators" },
+    "/courses/{courseId}": { "schema": "Course", "description": "Courses" },
+    "/assignments/{assignmentId}": { "schema": "Assignment", "description": "Assignments" },
+    "/students/{studentId}": { "schema": "Student", "description": "Students" },
+    "/submissions/{submissionId}": { "schema": "Submission", "description": "Submissions" },
+    "/inviteTokens/{tokenId}": { "schema": "InviteToken", "description": "Invite Tokens" },
+    "/interviewSessions/{sessionId}": { "schema": "InterviewSession", "description": "Interview Sessions" },
+    "/interviewSessions/{sessionId}/responseChunks/{chunkId}": { "schema": "ResponseChunk", "description": "Response Chunks" },
+    "/interviewSessions/{sessionId}/snapshots/{snapshotId}": { "schema": "Snapshot", "description": "Snapshots" },
+    "/analysisReports/{reportId}": { "schema": "AnalysisReport", "description": "Analysis Reports" },
+    "/analysisReports/{reportId}/flags/{flagId}": { "schema": "Flag", "description": "Flags" },
+    "/educatorDecisions/{decisionId}": { "schema": "EducatorDecision", "description": "Educator Decisions" },
+    "/auditLogs/{logId}": { "schema": "AuditLog", "description": "Audit Logs" }
+  }
+}

@@ -1,0 +1,26 @@
+# Faster Whisper STT microservice
+# CPU-only, no GPU needed. large-v3 model downloaded on first run (~3 GB).
+# Subsequent starts use the cached model from the named Docker volume.
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps: ffmpeg for audio decoding
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl && rm -rf /var/lib/apt/lists/*
+
+# Python deps
+RUN pip install --no-cache-dir faster-whisper flask
+
+COPY whisper_server.py .
+
+ENV WHISPER_MODEL=large-v3
+ENV WHISPER_PORT=3003
+
+EXPOSE 3003
+
+# Pre-download the model at build time so first container start is instant.
+# Comment this out if you prefer smaller images and are OK with first-run delay.
+RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3', device='cpu', compute_type='int8')"
+
+CMD ["python3", "whisper_server.py"]

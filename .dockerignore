@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+*.log
+.claude
+tts_server.py
+whisper_server.py
+__pycache__
+*.pyc
+.git

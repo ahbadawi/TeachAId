@@ -1,0 +1,73 @@
+# TeachAId — full stack
+#
+# Services:
+#   kokoro   — Kokoro-82M neural TTS (EN, no API key, CPU-only)
+#   whisper  — Faster Whisper STT   (local, no API key, CPU-only, large-v3)
+#   app      — Express API + React static frontend
+#
+# Usage:
+#   docker compose up -d       # start all in background
+#   docker compose logs -f     # tail logs
+#   docker compose down        # stop
+#
+# Required env vars — copy .env.example to .env:
+#   ANTHROPIC_API_KEY   — Claude API key
+#   APP_URL             — Public HTTPS URL
+
+services:
+
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    restart: unless-stopped
+    ports:
+      - "8880:8880"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8880/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  whisper:
+    build:
+      context: .
+      dockerfile: Dockerfile.whisper
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      WHISPER_MODEL: "${WHISPER_MODEL:-large-v3}"
+      WHISPER_PORT: "3003"
+    volumes:
+      - whisper-cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3003/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s   # large-v3 model download on first run (~3 GB)
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      KOKORO_URL: "http://kokoro:8880"
+      WHISPER_URL: "http://whisper:3003/transcribe"
+      APP_URL: "${APP_URL}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+    depends_on:
+      kokoro:
+        condition: service_healthy
+      whisper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  whisper-cache:
