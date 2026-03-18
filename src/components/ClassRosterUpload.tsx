@@ -25,6 +25,27 @@ function normalizeHeader(h: unknown): string {
   return String(h ?? '').toLowerCase().trim().replace(/[^a-z]/g, '');
 }
 
+/** Score how likely a column is to be an email column (0–1) */
+function emailScore(values: string[]): number {
+  const nonEmpty = values.filter(v => v.length > 0);
+  if (!nonEmpty.length) return 0;
+  const withAt = nonEmpty.filter(v => v.includes('@') && v.includes('.')).length;
+  return withAt / nonEmpty.length;
+}
+
+/** Score how likely a column is to be a name column (0–1) */
+function nameScore(header: string, values: string[], emailColIdx: number, colIdx: number): number {
+  if (colIdx === emailColIdx) return 0;
+  const h = normalizeHeader(header);
+  // Header hints
+  const headerHint = ['name', 'student', 'fullname', 'firstname', 'lastname', 'first', 'last'].some(k => h.includes(k)) ? 0.4 : 0;
+  const nonEmpty = values.filter(v => v.length > 0);
+  if (!nonEmpty.length) return headerHint;
+  // Name-like: mostly alphabetic, no @, reasonable length
+  const nameLike = nonEmpty.filter(v => !v.includes('@') && /^[a-zA-Z\u0600-\u06FF '\-\.]{2,60}$/.test(v)).length;
+  return headerHint + 0.6 * (nameLike / nonEmpty.length);
+}
+
 export default function ClassRosterUpload({ courseId, educatorId, onClose, onUploaded }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -62,26 +83,55 @@ export default function ClassRosterUpload({ courseId, educatorId, onClose, onUpl
           return;
         }
 
-        // Detect header row
-        const headers = (raw[0] as unknown[]).map(normalizeHeader);
-        const nameIdx = headers.findIndex(h => ['name', 'fullname', 'studentname', 'firstname'].includes(h)
-          || h.includes('name'));
-        const emailIdx = headers.findIndex(h => h === 'email' || h.includes('email') || h.includes('mail'));
+        const headerRow = raw[0] as unknown[];
+        const numCols = headerRow.length;
 
-        if (nameIdx === -1 || emailIdx === -1) {
+        // Build per-column value arrays from data rows
+        const colValues: string[][] = Array.from({ length: numCols }, (_, ci) =>
+          raw.slice(1).map(r => String((r as unknown[])[ci] ?? '').trim())
+        );
+
+        // Detect email column: highest email score
+        const emailScores = colValues.map(v => emailScore(v));
+        const emailIdx = emailScores.indexOf(Math.max(...emailScores));
+        if (emailScores[emailIdx] < 0.3) {
           setParseError(
-            `Could not find required columns. Found headers: [${(raw[0] as unknown[]).join(', ')}]. ` +
-            `Please ensure the file has a "Name" column and an "Email" column.`
+            `Could not find an email column. None of the columns appear to contain email addresses (@). ` +
+            `Found columns: [${headerRow.join(', ')}]`
           );
           return;
         }
+
+        // Detect name column: highest name score (excluding email col)
+        const nameScores = headerRow.map((h, ci) => nameScore(String(h), colValues[ci], emailIdx, ci));
+        const nameIdx = nameScores.indexOf(Math.max(...nameScores));
+        if (nameScores[nameIdx] < 0.1) {
+          setParseError(
+            `Could not find a name column. Found columns: [${headerRow.join(', ')}]. ` +
+            `Please ensure there is a column with student names.`
+          );
+          return;
+        }
+
+        // Check if there's a separate "last name" column we should combine
+        const firstIdx = headerRow.findIndex((h, ci) => {
+          const nh = normalizeHeader(h);
+          return ci !== emailIdx && (nh === 'first' || nh === 'firstname' || nh.startsWith('first'));
+        });
+        const lastIdx = headerRow.findIndex((h, ci) => {
+          const nh = normalizeHeader(h);
+          return ci !== emailIdx && ci !== firstIdx && (nh === 'last' || nh === 'lastname' || nh.startsWith('last'));
+        });
+        const useSplit = firstIdx !== -1 && lastIdx !== -1;
 
         const seen = new Set<string>();
         const parsed: ParsedRow[] = [];
 
         for (let i = 1; i < raw.length; i++) {
           const row = raw[i] as unknown[];
-          const name = String(row[nameIdx] ?? '').trim();
+          const name = useSplit
+            ? `${String(row[firstIdx] ?? '').trim()} ${String(row[lastIdx] ?? '').trim()}`.trim()
+            : String(row[nameIdx] ?? '').trim();
           const email = String(row[emailIdx] ?? '').trim().toLowerCase();
           const errors: string[] = [];
 
