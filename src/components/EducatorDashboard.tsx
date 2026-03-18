@@ -408,7 +408,7 @@ function SettingsPanel({ educatorId }: { educatorId: string }) {
     setSeedError(null);
     setSeedLinks(null);
     try {
-      // Create test course
+      console.log('[seed] step 1: create course');
       const courseRef = await addDoc(collection(db, 'courses'), {
         name: 'Test Interview Class',
         description: 'Seed data for testing the student interview flow.',
@@ -419,8 +419,9 @@ function SettingsPanel({ educatorId }: { educatorId: string }) {
         defaultCaptureMode: 'Snapshot',
         createdAt: serverTimestamp(),
       });
+      console.log('[seed] step 1 OK:', courseRef.id);
 
-      // Create test assignment (window: now → 7 days)
+      console.log('[seed] step 2: create assignment');
       const windowOpen = new Date().toISOString();
       const windowClose = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
       const assignmentRef = await addDoc(collection(db, 'assignments'), {
@@ -436,19 +437,22 @@ function SettingsPanel({ educatorId }: { educatorId: string }) {
         status: 'Active',
         createdAt: serverTimestamp(),
       });
+      console.log('[seed] step 2 OK:', assignmentRef.id);
 
-      // Add 3 placeholder questions
+      console.log('[seed] step 3: create questions');
       for (const [i, q] of [
         { textEn: 'Please introduce yourself and briefly describe your academic background.', textAr: 'يرجى تقديم نفسك ووصف خلفيتك الأكاديمية باختصار.' },
         { textEn: 'Describe the main idea of a recent assignment or project you worked on.', textAr: 'صف الفكرة الرئيسية لمشروع أو تكليف أخير عملت عليه.' },
         { textEn: 'What was the most challenging part of that work, and how did you handle it?', textAr: 'ما هو الجزء الأصعب في ذلك العمل، وكيف تعاملت معه؟' },
       ].entries()) {
         await addDoc(collection(db, 'assignments', assignmentRef.id, 'questions'), { ...q, order: i });
+        console.log('[seed] question', i, 'OK');
       }
 
-      // Create students + tokens
+      console.log('[seed] step 4: create students + tokens');
       const links: { name: string; email: string; url: string }[] = [];
       for (const s of TEST_STUDENTS) {
+        console.log('[seed] creating student:', s.email);
         const studentRef = await addDoc(collection(db, 'students'), {
           name: s.name,
           email: s.email,
@@ -456,8 +460,8 @@ function SettingsPanel({ educatorId }: { educatorId: string }) {
           institutionId: educatorId,
           createdAt: serverTimestamp(),
         });
+        console.log('[seed] student OK:', studentRef.id, '— creating token');
 
-        // Generate secure token
         const rawToken = crypto.randomUUID();
         const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rawToken));
         const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -470,6 +474,7 @@ function SettingsPanel({ educatorId }: { educatorId: string }) {
           issuedBy: educatorId,
           createdAt: serverTimestamp(),
         });
+        console.log('[seed] token OK for', s.email);
         links.push({ name: s.name, email: s.email, url: `${window.location.origin}/?token=${rawToken}` });
       }
 
