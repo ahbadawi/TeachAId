@@ -13,10 +13,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
+const appUrl = process.env.APP_URL ? process.env.APP_URL.replace(/\/$/, '') : '';
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
-  ...(process.env.APP_URL ? [process.env.APP_URL.replace(/\/$/, '')] : []),
+  // Render sets APP_URL — normalise to always have https:// prefix
+  ...(appUrl ? [
+    appUrl,
+    appUrl.startsWith('https://') ? appUrl : `https://${appUrl}`,
+    appUrl.startsWith('http://') ? appUrl : `http://${appUrl}`,
+  ] : []),
+  // Hard-code the Render domain as fallback so it always works
+  'https://teachaid.onrender.com',
 ];
 app.use(cors({
   origin: (origin, cb) => {
