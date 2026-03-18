@@ -3,8 +3,9 @@ import { db, storage } from '../firebase';
 import { doc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { Course, Assignment, CourseContextFile } from '../types';
-import { ArrowLeft, Save, Upload, Trash2, FileText, Loader2, BookOpen } from 'lucide-react';
+import { ArrowLeft, Save, Upload, Trash2, FileText, Loader2, BookOpen, Users } from 'lucide-react';
 import { cn } from '../lib/utils';
+import ClassRosterUpload from './ClassRosterUpload';
 
 interface Props {
   course: Course;
@@ -25,6 +26,8 @@ export default function CourseDetail({ course, assignments, isDev, onBack, onSel
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [showRosterUpload, setShowRosterUpload] = useState(false);
+  const [rosterUploadedCount, setRosterUploadedCount] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const courseAssignments = assignments.filter(a => a.courseId === course.id);
@@ -167,6 +170,24 @@ export default function CourseDetail({ course, assignments, isDev, onBack, onSel
         </div>
       </section>
 
+      {/* Class Roster */}
+      <section className="bg-white rounded-3xl border border-stone-200 p-6 space-y-4">
+        <div>
+          <h2 className="text-sm font-bold text-stone-400 uppercase tracking-wider">Class Roster</h2>
+          <p className="text-xs text-stone-400 mt-1">Upload an Excel or CSV file to bulk-add students to this course. Requires Name and Email columns.</p>
+        </div>
+        {rosterUploadedCount !== null && (
+          <p className="text-xs text-emerald-700 font-medium">{rosterUploadedCount} student{rosterUploadedCount !== 1 ? 's' : ''} added from last upload.</p>
+        )}
+        <button
+          onClick={() => setShowRosterUpload(true)}
+          className="flex items-center gap-2 px-4 py-2.5 border-2 border-dashed border-stone-200 rounded-2xl text-sm text-stone-500 hover:border-emerald-300 hover:text-emerald-600 hover:bg-emerald-50 transition-all w-full justify-center"
+        >
+          <Users className="w-4 h-4" />
+          Upload Class Roster (.xls / .xlsx / .csv)
+        </button>
+      </section>
+
       {/* Defaults */}
       <section className="bg-white rounded-3xl border border-stone-200 p-6 space-y-5">
         <h2 className="text-sm font-bold text-stone-400 uppercase tracking-wider">Assignment Defaults</h2>
@@ -235,6 +256,15 @@ export default function CourseDetail({ course, assignments, isDev, onBack, onSel
         {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
         {saved ? 'Saved!' : saving ? 'Saving…' : 'Save Changes'}
       </button>
+
+      {showRosterUpload && (
+        <ClassRosterUpload
+          courseId={course.id}
+          educatorId={course.educatorId}
+          onClose={() => setShowRosterUpload(false)}
+          onUploaded={(count) => { setRosterUploadedCount(count); setShowRosterUpload(false); }}
+        />
+      )}
     </div>
   );
 }

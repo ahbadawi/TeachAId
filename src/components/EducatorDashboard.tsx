@@ -378,6 +378,15 @@ const TEST_STUDENTS = [
   { name: 'Ashraf (Gmail)', email: 'ashraf.badawi@gmail.com', studentId: 'test-gmail-003' },
 ];
 
+const REAL_COURSES = [
+  { name: 'CSAI-490: Selected Topics in Computational Sciences', institutionId: 'zewail-city', defaultQuestionCount: 12 },
+  { name: 'ITNS-407: IT Audit and Risk Management', institutionId: 'zewail-city', defaultQuestionCount: 10 },
+  { name: 'CSAI-499: Senior Project Part 2', institutionId: 'zewail-city', defaultQuestionCount: 8 },
+  { name: 'CS-224: Computer Architecture (Monday Section)', institutionId: 'upm', defaultQuestionCount: 12 },
+  { name: 'CS-224: Computer Architecture (Friday Section)', institutionId: 'upm', defaultQuestionCount: 12 },
+  { name: 'AI-372: AI Ethics & Professionalism', institutionId: 'upm', defaultQuestionCount: 10 },
+];
+
 function SettingsPanel({ educatorId }: { educatorId: string }) {
   const storageKey = `teachaid_settings_${educatorId}`;
   const saved = JSON.parse(localStorage.getItem(storageKey) || '{}');
@@ -390,6 +399,9 @@ function SettingsPanel({ educatorId }: { educatorId: string }) {
   const [seeding, setSeeding] = useState(false);
   const [seedLinks, setSeedLinks] = useState<{ name: string; email: string; url: string }[] | null>(null);
   const [seedError, setSeedError] = useState<string | null>(null);
+  const [seedingCourses, setSeedingCourses] = useState(false);
+  const [coursesSeeded, setCoursesSeeded] = useState(false);
+  const [courseSeedError, setCourseSeedError] = useState<string | null>(null);
 
   const seedTestData = async () => {
     setSeeding(true);
@@ -467,6 +479,29 @@ function SettingsPanel({ educatorId }: { educatorId: string }) {
       setSeedError(err?.message || 'Seeding failed. Check Firestore rules and console.');
     } finally {
       setSeeding(false);
+    }
+  };
+
+  const seedCourses = async () => {
+    setSeedingCourses(true);
+    setCourseSeedError(null);
+    try {
+      for (const c of REAL_COURSES) {
+        await addDoc(collection(db, 'courses'), {
+          name: c.name,
+          educatorId,
+          institutionId: c.institutionId,
+          defaultLanguagePair: 'en',
+          defaultQuestionCount: c.defaultQuestionCount,
+          defaultCaptureMode: 'Snapshot',
+          createdAt: serverTimestamp(),
+        });
+      }
+      setCoursesSeeded(true);
+    } catch (err: any) {
+      setCourseSeedError(err?.message || 'Failed to create courses.');
+    } finally {
+      setSeedingCourses(false);
     }
   };
 
@@ -553,6 +588,27 @@ function SettingsPanel({ educatorId }: { educatorId: string }) {
           <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
             <p className="text-xs text-amber-700 font-medium">Testing Mode is ON — all interview timers run at 5 seconds.</p>
           </div>
+        )}
+      </section>
+
+      <section className="bg-white rounded-3xl border border-stone-200 p-6 space-y-4">
+        <h3 className="text-sm font-bold text-stone-400 uppercase tracking-wider">My Courses</h3>
+        <p className="text-xs text-stone-500 leading-relaxed">
+          Creates all 6 courses: CSAI-490, ITNS-407, CSAI-499, CS-224 (Monday), CS-224 (Friday), and AI-372.
+          Safe to run once — does not check for duplicates, so only click if courses don't exist yet.
+        </p>
+        {courseSeedError && <p className="text-xs text-red-600">{courseSeedError}</p>}
+        {coursesSeeded ? (
+          <p className="text-xs text-emerald-700 font-medium">All 6 courses created. Go to the Courses tab to view them.</p>
+        ) : (
+          <button
+            onClick={seedCourses}
+            disabled={seedingCourses}
+            className="flex items-center gap-2 bg-emerald-700 text-white px-5 py-2.5 rounded-2xl text-sm font-medium hover:bg-emerald-600 disabled:opacity-50 transition-colors"
+          >
+            {seedingCourses && <Loader2 className="w-4 h-4 animate-spin" />}
+            {seedingCourses ? 'Creating courses…' : 'Create My 6 Courses'}
+          </button>
         )}
       </section>
 
