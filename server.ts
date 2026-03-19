@@ -122,13 +122,26 @@ app.get('/dev-pdf/:name', (req, res) => {
   } catch { res.status(404).json({ error: 'not found' }); }
 });
 
-// ─── Submission Analysis (PDF pages → Claude Vision → questions + grade) ──────
+// ─── Generate rubric from brief if none provided ─────────────────────────────
+async function ensureRubric(briefText: string, rubricText?: string): Promise<string> {
+  if (rubricText?.trim()) return rubricText;
+  const result = await gemini('Academic grading rubric writer.').generateContent(
+    `Create a concise grading rubric (4–6 criteria, each 0–100 points) for this assignment:\n\n${briefText}\n\n` +
+    'Return plain text only — no JSON, no markdown headers. Format: "Criterion: weight% — description"'
+  );
+  return result.response.text().trim();
+}
+
+// ─── Submission Analysis (PDF pages → Gemini Vision → questions + grade) ─────
 app.post('/api/analyze-submission', async (req, res) => {
   try {
     const { pages, briefText, rubricText, count = 8, fileName } = req.body as {
       pages: string[]; briefText: string; rubricText?: string; count?: number; fileName?: string;
     };
     if (!pages?.length) { res.status(400).json({ error: 'pages array is required.' }); return; }
+
+    const effectiveRubric = await ensureRubric(briefText, rubricText);
+    const rubricSource = rubricText?.trim() ? 'provided' : 'ai-generated';
 
     const pagesToAnalyze = pages.slice(0, 10);
     const parts: ({ text: string } | { inlineData: { mimeType: string; data: string } })[] = [];
@@ -139,14 +152,16 @@ app.post('/api/analyze-submission', async (req, res) => {
     parts.push({
       text:
         `Assignment brief: ${briefText}\n` +
-        `Grading rubric: ${rubricText || 'No rubric provided.'}\n\n` +
+        `Grading rubric (${rubricSource}): ${effectiveRubric}\n\n` +
         `Pages above are a student submission${fileName ? ` ("${fileName}")` : ''}.\n\n` +
-        `1. Grade against the brief and rubric.\n` +
-        `2. Select exactly ${count} sections for targeted interview questions.\n` +
+        `1. Grade against the brief and rubric. Be strict and specific.\n` +
+        `2. Flag any signs of AI-generated content (overly formal phrasing, generic arguments, uniform sentence length, lack of personal examples).\n` +
+        `3. Select exactly ${count} sections for targeted interview questions.\n` +
         `Each question must quote specific text — never generic topic questions.\n` +
         `Regions: normalized 0–1, (0,0)=top-left, keep tight.\n\n` +
         `Return ONLY valid JSON:\n` +
-        `{ "grade": { "score": 78, "breakdown": "...", "feedback": "..." },\n` +
+        `{ "grade": { "score": 78, "breakdown": "...", "feedback": "...", "rubricUsed": "${rubricSource}" },\n` +
+        `  "suspicionFlags": [{ "type": "ai_content"|"plagiarism_risk", "severity": 1-5, "description": "..." }],\n` +
         `  "questions": [{ "pageIndex": 0, "region": {"x1":0.05,"y1":0.30,"x2":0.95,"y2":0.46},\n` +
         `    "textEn": "You wrote \\"phrase\\" — explain...", "textAr": "...",\n` +
         `    "followUpEn": "...", "followUpAr": "...", "order": 0 }] }`,
@@ -154,7 +169,8 @@ app.post('/api/analyze-submission', async (req, res) => {
 
     const result = await gemini('Academic integrity examiner. Generate targeted interview questions verifying genuine authorship. Every question references specific submission content.').generateContent(parts);
     const parsed = JSON.parse(parseJsonResponse(result.response.text())) as {
-      grade: { score: number; breakdown: string; feedback: string };
+      grade: { score: number; breakdown: string; feedback: string; rubricUsed: string };
+      suspicionFlags?: { type: string; severity: number; description: string }[];
       questions: { pageIndex: number; region: { x1: number; y1: number; x2: number; y2: number }; textEn: string; textAr: string; followUpEn?: string; followUpAr?: string; order: number }[];
     };
 
@@ -175,7 +191,11 @@ app.post('/api/analyze-submission', async (req, res) => {
       } catch { return { ...q, id: `q-${i}` }; }
     }));
 
-    res.json({ questions: questionsWithImages, grade: parsed.grade });
+    res.json({
+      questions: questionsWithImages,
+      grade: { ...parsed.grade, rubricText: effectiveRubric },
+      suspicionFlags: parsed.suspicionFlags || [],
+    });
   } catch (err: any) {
     console.error('/api/analyze-submission error:', err);
     res.status(500).json({ error: 'Submission analysis failed.', detail: String(err?.message || err) });
@@ -186,18 +206,20 @@ app.post('/api/analyze-submission', async (req, res) => {
 app.post('/api/generate-questions', async (req, res) => {
   try {
     const { briefText, rubricText, submissionText, count = 12 } = req.body as {
-      briefText: string; rubricText: string; submissionText: string; count?: number;
+      briefText: string; rubricText?: string; submissionText?: string; count?: number;
     };
-    if (!briefText || !rubricText) { res.status(400).json({ error: 'briefText and rubricText required.' }); return; }
+    if (!briefText) { res.status(400).json({ error: 'briefText is required.' }); return; }
 
-    const prompt = `Generate exactly ${count} questions.\n\nAssignment brief:\n${briefText}\n\nGrading rubric:\n${rubricText}\n\n` +
+    const effectiveRubric = await ensureRubric(briefText, rubricText);
+
+    const prompt = `Generate exactly ${count} oral interview questions.\n\nAssignment brief:\n${briefText}\n\nGrading rubric:\n${effectiveRubric}\n\n` +
       (submissionText ? `Submission content:\n${submissionText}\n\n` : '') +
       'Return JSON array ONLY. Each: { "textEn", "textAr", "order", "followUpEn", "followUpAr" }';
 
     const result = await gemini('Academic integrity interviewer. Generate oral questions verifying student understanding. Test reasoning, not recall.').generateContent(prompt);
     const questions = JSON.parse(parseJsonResponse(result.response.text()));
     if (!Array.isArray(questions)) throw new Error('AI returned non-array');
-    res.json({ questions });
+    res.json({ questions, rubricGenerated: !rubricText?.trim(), rubricText: effectiveRubric });
   } catch (err) {
     console.error('/api/generate-questions error:', err);
     res.status(500).json({ error: 'Question generation failed.' });
@@ -248,7 +270,17 @@ app.post('/api/transcribe-and-analyze', async (req, res) => {
 
     const analysisPrompt =
       'Submission:\n' + submissionText + '\n\nRubric:\n' + (rubricText || 'None') + '\n\nInterview transcript:\n' + transcriptText + '\n\n' +
-      'Return JSON ONLY: { "comprehensionLevel": "High"|"Medium"|"Low", "recommendedAction": "Accept"|"Schedule Follow-up"|"Escalate for Review", "summary": "...", "flags": [{ "questionIndex": 0, "classification": "Hard Evidence"|"Soft Signal"|"Data Quality Issue", "severity": 1-5, "description": "..." }] }';
+      'Analyze the interview thoroughly. Return JSON ONLY:\n' +
+      '{\n' +
+      '  "comprehensionLevel": "High"|"Medium"|"Low",\n' +
+      '  "recommendedAction": "Accept"|"Schedule Follow-up"|"Escalate for Review",\n' +
+      '  "summary": "2-3 sentence overall assessment",\n' +
+      '  "toneAnalysis": { "overall": "confident|nervous|evasive|rehearsed|natural", "description": "..." },\n' +
+      '  "directness": { "score": 1-5, "description": "How directly the student answered questions" },\n' +
+      '  "clarity": { "score": 1-5, "description": "Clarity and coherence of explanations" },\n' +
+      '  "audioIssues": [{ "questionIndex": 0, "issue": "excessive_noise"|"multiple_speakers"|"inaudible"|"very_short_response"|"no_response", "description": "..." }],\n' +
+      '  "flags": [{ "questionIndex": 0, "classification": "Hard Evidence"|"Soft Signal"|"Data Quality Issue", "severity": 1-5, "description": "..." }]\n' +
+      '}';
 
     const analysisResult = await gemini().generateContent(analysisPrompt);
     res.json({ transcripts, analysis: JSON.parse(parseJsonResponse(analysisResult.response.text())) });

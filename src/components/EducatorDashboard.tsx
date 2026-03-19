@@ -72,12 +72,21 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
   }, [educator.id, isDev]);
 
   // Build a map of assignmentId → session stats
-  const sessionStats = assignments.reduce<Record<string, { total: number; completed: number }>>((acc, a) => {
+  const sessionStats = assignments.reduce<Record<string, {
+    total: number; completed: number;
+    submitted: number; interviewed: number; graded: number; flagged: number;
+  }>>((acc, a) => {
     const asSessions = sessions.filter(s => s.assignmentId === a.id);
+    const submitted = asSessions.filter(s => s.workFileUrl || s.status !== 'NOT_STARTED').length;
+    const interviewed = asSessions.filter(s =>
+      ['AWAITING_REVIEW', 'REVIEWED', 'AWAITING_PROCESSING', 'INCOMPLETE'].includes(s.status)
+    ).length;
+    const graded = asSessions.filter(s => (s as any).grade?.score !== undefined || s.status === 'REVIEWED').length;
+    const flagged = asSessions.filter(s => (s as any).flagged === true).length;
     const completed = asSessions.filter(s =>
       ['AWAITING_REVIEW', 'REVIEWED', 'AWAITING_PROCESSING'].includes(s.status)
     ).length;
-    acc[a.id] = { total: asSessions.length, completed };
+    acc[a.id] = { total: asSessions.length, completed, submitted, interviewed, graded, flagged };
     return acc;
   }, {});
 
@@ -331,9 +340,10 @@ function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode, labe
   );
 }
 
-function AssignmentCard({ assignment, stats }: { assignment: Assignment; stats: { total: number; completed: number } }) {
-  const completionPct = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
-
+function AssignmentCard({ assignment, stats }: {
+  assignment: Assignment;
+  stats: { total: number; completed: number; submitted: number; interviewed: number; graded: number; flagged: number };
+}) {
   const dueDate = assignment.windowClose ? new Date(assignment.windowClose) : null;
   const now = new Date();
   const dueLabel = dueDate
@@ -355,16 +365,31 @@ function AssignmentCard({ assignment, stats }: { assignment: Assignment; stats: 
           {assignment.status}
         </span>
       </div>
-      <div className="space-y-2">
-        <div className="flex justify-between text-xs text-stone-500">
-          <span>Completion</span>
-          <span>{stats.total > 0 ? `${stats.completed} / ${stats.total} (${completionPct}%)` : 'No responses yet'}</span>
+
+      {/* Submission / Interview / Grade stats */}
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="bg-stone-50 rounded-xl p-2 text-center">
+          <p className="text-lg font-bold text-stone-800">{stats.submitted}</p>
+          <p className="text-[10px] text-stone-400 uppercase tracking-wide">Submitted</p>
         </div>
-        <div className="h-1.5 bg-stone-100 rounded-full overflow-hidden">
-          <div className="h-full bg-emerald-500 transition-all" style={{ width: `${completionPct}%` }} />
+        <div className="bg-stone-50 rounded-xl p-2 text-center">
+          <p className="text-lg font-bold text-stone-800">{stats.interviewed}</p>
+          <p className="text-[10px] text-stone-400 uppercase tracking-wide">Interviewed</p>
+        </div>
+        <div className="bg-stone-50 rounded-xl p-2 text-center">
+          <p className="text-lg font-bold text-stone-800">{stats.graded}</p>
+          <p className="text-[10px] text-stone-400 uppercase tracking-wide">Graded</p>
         </div>
       </div>
-      <div className="mt-6 pt-4 border-t border-stone-50 flex justify-between items-center">
+
+      {stats.flagged > 0 && (
+        <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-100 rounded-xl px-3 py-1.5 mb-3">
+          <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+          <span className="text-xs text-amber-700 font-medium">{stats.flagged} submission{stats.flagged > 1 ? 's' : ''} flagged for review</span>
+        </div>
+      )}
+
+      <div className="mt-2 pt-3 border-t border-stone-50 flex justify-between items-center">
         <span className={cn('text-xs', dueDate && dueDate < now ? 'text-red-400' : 'text-stone-400')}>{dueLabel}</span>
         <span className="text-xs font-medium text-emerald-600">View Details</span>
       </div>

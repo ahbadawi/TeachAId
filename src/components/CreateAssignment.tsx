@@ -46,7 +46,7 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!briefFile || !rubricFile || !courseId || !title) return;
+    if (!briefFile || !courseId || !title) return;
     if (new Date(windowClose) <= new Date(windowOpen)) {
       setErrorMessage('Interview close date must be after the open date.');
       return;
@@ -58,16 +58,15 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
     try {
       // Upload files to Firebase Storage
       const briefStorageRef = ref(storage, `assignments/briefs/${Date.now()}_${briefFile.name}`);
-      const rubricStorageRef = ref(storage, `assignments/rubrics/${Date.now()}_${rubricFile.name}`);
+      const briefSnap = await uploadBytes(briefStorageRef, briefFile);
+      const briefUrl = await getDownloadURL(briefSnap.ref);
 
-      const [briefSnap, rubricSnap] = await Promise.all([
-        uploadBytes(briefStorageRef, briefFile),
-        uploadBytes(rubricStorageRef, rubricFile),
-      ]);
-      const [briefUrl, rubricUrl] = await Promise.all([
-        getDownloadURL(briefSnap.ref),
-        getDownloadURL(rubricSnap.ref),
-      ]);
+      let rubricUrl: string | undefined;
+      if (rubricFile) {
+        const rubricStorageRef = ref(storage, `assignments/rubrics/${Date.now()}_${rubricFile.name}`);
+        const rubricSnap = await uploadBytes(rubricStorageRef, rubricFile);
+        rubricUrl = await getDownloadURL(rubricSnap.ref);
+      }
 
       // Create assignment document
       const assignmentRef = await addDoc(collection(db, 'assignments'), {
@@ -75,7 +74,7 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
         courseId,
         educatorId,
         briefFileUrl: briefUrl,
-        rubricFileUrl: rubricUrl,
+        ...(rubricUrl ? { rubricFileUrl: rubricUrl } : {}),
         questionCount,
         questionMode,
         captureMode,
@@ -180,7 +179,7 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
             {/* Files */}
             <div className="grid grid-cols-2 gap-4">
               <FileUploadZone label="Assignment Brief *" file={briefFile} onFileSelect={setBriefFile} description="Task instructions for students" />
-              <FileUploadZone label="Grading Rubric *" file={rubricFile} onFileSelect={setRubricFile} description="Assessment criteria" />
+              <FileUploadZone label="Grading Rubric (optional)" file={rubricFile} onFileSelect={setRubricFile} description="If omitted, AI generates one" />
             </div>
 
             {/* Interview window */}
@@ -248,7 +247,7 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
                 <div>
                   <p className="text-sm font-medium text-emerald-800">
                     {processingStep === 'uploading' && 'Uploading files…'}
-                    {processingStep === 'generating' && 'Generating interview questions with Claude…'}
+                    {processingStep === 'generating' && 'Generating interview questions…'}
                   </p>
                   <p className="text-xs text-emerald-600 mt-0.5">This may take up to 30 seconds.</p>
                 </div>
@@ -259,7 +258,7 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
               <div className="bg-stone-50 p-4 rounded-2xl flex gap-3">
                 <Info className="w-5 h-5 text-stone-400 shrink-0" />
                 <p className="text-xs text-stone-600 leading-relaxed">
-                  TeachAId will generate {questionCount} interview questions using Claude. Students upload their own work during the interview session.
+                  TeachAId will generate {questionCount} interview questions from the brief{rubricFile ? ' and rubric' : ' — a rubric will be auto-generated if none is uploaded'}. Students upload their own work during the interview.
                 </p>
               </div>
             )}
@@ -267,7 +266,7 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
             {errorMessage && <p className="text-sm text-red-600">{errorMessage}</p>}
 
             <button
-              disabled={isProcessing || !briefFile || !rubricFile || !title}
+              disabled={isProcessing || !briefFile || !title}
               className="w-full bg-stone-900 text-white py-4 rounded-2xl font-medium hover:bg-stone-800 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isProcessing && <Loader2 className="w-5 h-5 animate-spin" />}
