@@ -3,15 +3,9 @@
   "configurations": [
     {
       "name": "Vite Frontend",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeExecutable": "/Users/ashrafbadawi/Library/CloudStorage/GoogleDrive-ashraf.badawi@gmail.com/My Drive/Desktop/Output-Central/node-v22.14.0-darwin-arm64/bin/node",
+      "runtimeArgs": ["/Users/ashrafbadawi/Library/CloudStorage/GoogleDrive-ashraf.badawi@gmail.com/My Drive/Desktop/Output-Central/node-v22.14.0-darwin-arm64/lib/node_modules/npm/bin/npm-cli.js", "run", "dev"],
       "port": 3000
-    },
-    {
-      "name": "Express API Server",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "server"],
-      "port": 3001
     }
   ]
 }
