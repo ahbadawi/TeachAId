@@ -4,7 +4,7 @@ services:
     runtime: node
     region: oregon
     plan: free
-    buildCommand: npm ci && npm run build
+    buildCommand: npm install && npm run build
     startCommand: node node_modules/tsx/dist/cli.mjs server.ts
     healthCheckPath: /api/health
     envVars:
