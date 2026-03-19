@@ -23,9 +23,15 @@ export default function StudentList({ assignment, onClose }: Props) {
   const [showAddStudent, setShowAddStudent] = useState(false);
 
   useEffect(() => {
-    const qStudents = query(collection(db, 'students'), where('institutionId', '==', assignment.educatorId || 'ashraf-institution'));
+    // Only load students enrolled in this assignment's course
+    const qStudents = query(
+      collection(db, 'students'),
+      where('institutionId', '==', assignment.educatorId || 'ashraf-institution')
+    );
     const unsubStudents = onSnapshot(qStudents, snap => {
-      setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() } as Student)));
+      const all = snap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
+      // Filter to this course only — students belong to exactly one course
+      setStudents(all.filter(s => s.courseId === assignment.courseId));
     });
 
     // Filtered to this assignment only
@@ -177,12 +183,12 @@ export default function StudentList({ assignment, onClose }: Props) {
         </table>
       </div>
 
-      {showAddStudent && <AddStudentModal onClose={() => setShowAddStudent(false)} institutionId={assignment.educatorId || 'ashraf-institution'} />}
+      {showAddStudent && <AddStudentModal onClose={() => setShowAddStudent(false)} institutionId={assignment.educatorId || 'ashraf-institution'} courseId={assignment.courseId} />}
     </div>
   );
 }
 
-function AddStudentModal({ onClose, institutionId }: { onClose: () => void; institutionId: string }) {
+function AddStudentModal({ onClose, institutionId, courseId }: { onClose: () => void; institutionId: string; courseId: string }) {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
   const [email, setEmail] = useState('');
@@ -198,6 +204,7 @@ function AddStudentModal({ onClose, institutionId }: { onClose: () => void; inst
         studentId: studentId.trim(),
         email: email.trim() || null,
         institutionId,
+        courseId,
         createdAt: serverTimestamp(),
       });
       onClose();

@@ -57,6 +57,7 @@ export interface Student {
   studentId: string;
   email?: string;
   institutionId: string;
+  courseId: string;
 }
 
 export interface Submission {
