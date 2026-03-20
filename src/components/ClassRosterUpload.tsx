@@ -1,7 +1,7 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { db } from '../firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, getDocs, query, where } from 'firebase/firestore';
 import { Upload, CheckCircle2, AlertCircle, X, Loader2, Users } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -15,6 +15,10 @@ interface ParsedRow {
 interface Props {
   courseId: string;
   educatorId: string;
+  /** When set, students are added to a specific assignment only (not the whole course) */
+  assignmentId?: string;
+  /** 'course' saves to course; 'assignment' adds assignmentIds to the student doc */
+  scope?: 'course' | 'assignment';
   onClose: () => void;
   onUploaded: (count: number) => void;
 }
@@ -25,28 +29,25 @@ function normalizeHeader(h: unknown): string {
   return String(h ?? '').toLowerCase().trim().replace(/[^a-z]/g, '');
 }
 
-/** Score how likely a column is to be an email column (0–1) */
 function emailScore(values: string[]): number {
   const nonEmpty = values.filter(v => v.length > 0);
   if (!nonEmpty.length) return 0;
-  const withAt = nonEmpty.filter(v => v.includes('@') && v.includes('.')).length;
-  return withAt / nonEmpty.length;
+  return nonEmpty.filter(v => v.includes('@') && v.includes('.')).length / nonEmpty.length;
 }
 
-/** Score how likely a column is to be a name column (0–1) */
 function nameScore(header: string, values: string[], emailColIdx: number, colIdx: number): number {
   if (colIdx === emailColIdx) return 0;
   const h = normalizeHeader(header);
-  // Header hints
   const headerHint = ['name', 'student', 'fullname', 'firstname', 'lastname', 'first', 'last'].some(k => h.includes(k)) ? 0.4 : 0;
   const nonEmpty = values.filter(v => v.length > 0);
   if (!nonEmpty.length) return headerHint;
-  // Name-like: mostly alphabetic, no @, reasonable length
   const nameLike = nonEmpty.filter(v => !v.includes('@') && /^[a-zA-Z\u0600-\u06FF '\-\.]{2,60}$/.test(v)).length;
   return headerHint + 0.6 * (nameLike / nonEmpty.length);
 }
 
-export default function ClassRosterUpload({ courseId, educatorId, onClose, onUploaded }: Props) {
+export default function ClassRosterUpload({
+  courseId, educatorId, assignmentId, scope = 'course', onClose, onUploaded,
+}: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -54,6 +55,20 @@ export default function ClassRosterUpload({ courseId, educatorId, onClose, onUpl
   const [parseError, setParseError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedCount, setSavedCount] = useState<number | null>(null);
+
+  // Existing student names in this course for duplicate detection
+  const [existingNames, setExistingNames] = useState<Set<string>>(new Set());
+  const [existingCount, setExistingCount] = useState(0);
+
+  useEffect(() => {
+    // Load existing students to detect name duplicates
+    const q = query(collection(db, 'students'), where('courseId', '==', courseId));
+    getDocs(q).then(snap => {
+      const names = new Set(snap.docs.map(d => (d.data().name as string || '').trim().toLowerCase()));
+      setExistingNames(names);
+      setExistingCount(snap.size);
+    }).catch(() => {});
+  }, [courseId]);
 
   const validRows = rows?.filter(r => r.errors.length === 0) ?? [];
   const invalidRows = rows?.filter(r => r.errors.length > 0) ?? [];
@@ -85,13 +100,11 @@ export default function ClassRosterUpload({ courseId, educatorId, onClose, onUpl
 
         const headerRow = raw[0] as unknown[];
         const numCols = headerRow.length;
-
-        // Build per-column value arrays from data rows
         const colValues: string[][] = Array.from({ length: numCols }, (_, ci) =>
           raw.slice(1).map(r => String((r as unknown[])[ci] ?? '').trim())
         );
 
-        // Detect email column: highest email score
+        // Detect email column
         const emailScores = colValues.map(v => emailScore(v));
         const emailIdx = emailScores.indexOf(Math.max(...emailScores));
         if (emailScores[emailIdx] < 0.3) {
@@ -102,7 +115,7 @@ export default function ClassRosterUpload({ courseId, educatorId, onClose, onUpl
           return;
         }
 
-        // Detect name column: highest name score (excluding email col)
+        // Detect name column
         const nameScores = headerRow.map((h, ci) => nameScore(String(h), colValues[ci], emailIdx, ci));
         const nameIdx = nameScores.indexOf(Math.max(...nameScores));
         if (nameScores[nameIdx] < 0.1) {
@@ -113,7 +126,7 @@ export default function ClassRosterUpload({ courseId, educatorId, onClose, onUpl
           return;
         }
 
-        // Check if there's a separate "last name" column we should combine
+        // Detect separate first/last name columns
         const firstIdx = headerRow.findIndex((h, ci) => {
           const nh = normalizeHeader(h);
           return ci !== emailIdx && (nh === 'first' || nh === 'firstname' || nh.startsWith('first'));
@@ -124,7 +137,8 @@ export default function ClassRosterUpload({ courseId, educatorId, onClose, onUpl
         });
         const useSplit = firstIdx !== -1 && lastIdx !== -1;
 
-        const seen = new Set<string>();
+        const seenEmails = new Set<string>();
+        const seenNames = new Set<string>(); // names seen in this file
         const parsed: ParsedRow[] = [];
 
         for (let i = 1; i < raw.length; i++) {
@@ -135,18 +149,30 @@ export default function ClassRosterUpload({ courseId, educatorId, onClose, onUpl
           const email = String(row[emailIdx] ?? '').trim().toLowerCase();
           const errors: string[] = [];
 
-          if (!name) errors.push('Name is empty');
+          if (!name) {
+            errors.push('Name is empty');
+          } else {
+            const nameLower = name.toLowerCase();
+            if (seenNames.has(nameLower)) {
+              errors.push(`Duplicate name in file: "${name}"`);
+            } else if (existingNames.has(nameLower)) {
+              errors.push(`Already in roster: "${name}"`);
+            } else {
+              seenNames.add(nameLower);
+            }
+          }
+
           if (!email) {
             errors.push('Email is empty');
           } else if (!EMAIL_RE.test(email)) {
             errors.push(`Invalid email format: "${email}"`);
-          } else if (seen.has(email)) {
+          } else if (seenEmails.has(email)) {
             errors.push(`Duplicate email: "${email}"`);
           } else {
-            seen.add(email);
+            seenEmails.add(email);
           }
 
-          // Skip fully empty rows (both name and email blank)
+          // Skip fully empty rows
           if (!name && !email) continue;
 
           parsed.push({ rowNum: i + 1, name, email, errors });
@@ -182,14 +208,19 @@ export default function ClassRosterUpload({ courseId, educatorId, onClose, onUpl
     setSaving(true);
     try {
       for (const row of validRows) {
-        await addDoc(collection(db, 'students'), {
+        const studentData: Record<string, any> = {
           name: row.name,
           email: row.email,
           studentId: row.email,
           courseId,
           institutionId: educatorId,
           createdAt: serverTimestamp(),
-        });
+        };
+        // When adding to a specific assignment, flag the student as assignment-scoped
+        if (scope === 'assignment' && assignmentId) {
+          studentData.assignmentIds = [assignmentId];
+        }
+        await addDoc(collection(db, 'students'), studentData);
       }
       setSavedCount(validRows.length);
       onUploaded(validRows.length);
@@ -200,29 +231,41 @@ export default function ClassRosterUpload({ courseId, educatorId, onClose, onUpl
     }
   };
 
+  const isAssignmentScope = scope === 'assignment';
+
   return (
-    <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-white w-full max-w-2xl rounded-[32px] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className={cn(!isAssignmentScope && 'fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50')}>
+      <div className={cn(
+        'bg-white rounded-[32px] shadow-2xl overflow-hidden flex flex-col',
+        isAssignmentScope ? 'w-full' : 'w-full max-w-2xl max-h-[90vh]'
+      )}>
 
-        {/* Header */}
-        <div className="p-6 border-b border-stone-100 flex justify-between items-center shrink-0">
-          <div className="flex items-center gap-3">
-            <Users className="w-5 h-5 text-emerald-600" />
-            <h2 className="text-xl font-serif font-medium text-stone-900">Upload Class Roster</h2>
+        {/* Header — only shown in modal (course scope) mode */}
+        {!isAssignmentScope && (
+          <div className="p-6 border-b border-stone-100 flex justify-between items-center shrink-0">
+            <div className="flex items-center gap-3">
+              <Users className="w-5 h-5 text-emerald-600" />
+              <div>
+                <h2 className="text-xl font-serif font-medium text-stone-900">Upload Class Roster</h2>
+                {existingCount > 0 && (
+                  <p className="text-xs text-stone-500 mt-0.5">{existingCount} students already in this course</p>
+                )}
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 hover:bg-stone-100 rounded-full transition-colors">
+              <X className="w-5 h-5 text-stone-400" />
+            </button>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-stone-100 rounded-full transition-colors">
-            <X className="w-5 h-5 text-stone-400" />
-          </button>
-        </div>
+        )}
 
-        <div className="overflow-y-auto flex-1 p-6 space-y-5">
+        <div className={cn('overflow-y-auto flex-1 space-y-5', isAssignmentScope ? 'p-0' : 'p-6')}>
 
           {/* Drop zone */}
           {!rows && (
             <>
               <p className="text-xs text-stone-500">
                 Upload an Excel or CSV file with a <strong>Name</strong> column and an <strong>Email</strong> column.
-                Any other columns are ignored. Each email must be unique and properly formatted.
+                Each name must be unique — duplicates already in the roster will be flagged.
               </p>
 
               <div
@@ -271,14 +314,18 @@ export default function ClassRosterUpload({ courseId, educatorId, onClose, onUpl
                 </button>
               </div>
 
-              {/* Summary badges */}
-              <div className="flex gap-3">
+              <div className="flex gap-3 flex-wrap">
                 <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> {validRows.length} valid
+                  <CheckCircle2 className="w-3.5 h-3.5" /> {validRows.length} valid — will be added
                 </span>
                 {invalidRows.length > 0 && (
                   <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-red-50 text-red-700 px-3 py-1.5 rounded-full">
-                    <AlertCircle className="w-3.5 h-3.5" /> {invalidRows.length} with errors
+                    <AlertCircle className="w-3.5 h-3.5" /> {invalidRows.length} skipped
+                  </span>
+                )}
+                {existingCount > 0 && (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-stone-100 text-stone-500 px-3 py-1.5 rounded-full">
+                    <Users className="w-3.5 h-3.5" /> {existingCount} already in course
                   </span>
                 )}
               </div>
@@ -290,7 +337,6 @@ export default function ClassRosterUpload({ courseId, educatorId, onClose, onUpl
                 </div>
               )}
 
-              {/* Table */}
               <div className="border border-stone-100 rounded-2xl overflow-hidden">
                 <table className="w-full text-xs">
                   <thead className="bg-stone-50 text-stone-500">
@@ -339,13 +385,18 @@ export default function ClassRosterUpload({ courseId, educatorId, onClose, onUpl
             <div className="text-center py-8 space-y-3">
               <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto" />
               <p className="text-lg font-medium text-stone-800">{savedCount} students added</p>
-              <p className="text-sm text-stone-500">They will appear in the Student List for this course.</p>
+              <p className="text-sm text-stone-500">
+                {isAssignmentScope
+                  ? 'They will appear in the student list for this assignment.'
+                  : 'They will appear in the Student List for this course.'}
+              </p>
+              <p className="text-xs font-bold text-emerald-600">Total in course: {existingCount + savedCount}</p>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t border-stone-100 flex justify-end gap-3 shrink-0">
+        <div className={cn('border-t border-stone-100 flex justify-end gap-3 shrink-0', isAssignmentScope ? 'p-4 mt-4' : 'p-6')}>
           {savedCount !== null ? (
             <button onClick={onClose} className="bg-stone-900 text-white px-6 py-2.5 rounded-2xl text-sm font-medium hover:bg-stone-800">
               Done

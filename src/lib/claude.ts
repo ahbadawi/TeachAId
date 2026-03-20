@@ -81,3 +81,67 @@ export function cancelSpeech(): void {
     window.speechSynthesis.cancel();
   }
 }
+
+// ─── Extract text from a file URL (brief/rubric) ─────────────────────────────
+export async function extractTextFromUrl(url: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/extract-text`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) throw new Error('Text extraction failed');
+  const data = await res.json();
+  return (data as any).text as string;
+}
+
+// ─── Generate assignment summary + generic questions ─────────────────────────
+export async function generateAssignmentSummary(
+  briefText: string, rubricText: string, questionCount: number
+): Promise<{ summaryText: string; questions: GeneratedQuestion[]; rubricText: string }> {
+  const res = await fetch(`${API_BASE}/generate-assignment-summary`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ briefText, rubricText, questionCount }),
+  });
+  if (!res.ok) throw new Error('Summary generation failed');
+  return res.json() as Promise<{ summaryText: string; questions: GeneratedQuestion[]; rubricText: string }>;
+}
+
+// ─── Generate per-student questions from their submission ─────────────────────
+export async function generateStudentQuestions(
+  submissionText: string, briefText: string, rubricText: string,
+  genericQuestions: GeneratedQuestion[], courseOutline?: string, count = 8
+): Promise<GeneratedQuestion[]> {
+  const res = await fetch(`${API_BASE}/generate-student-questions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ submissionText, briefText, rubricText, genericQuestions, courseOutline, count }),
+  });
+  if (!res.ok) throw new Error('Student question generation failed');
+  const data = await res.json();
+  return (data as any).questions as GeneratedQuestion[];
+}
+
+// ─── Send invite emails ───────────────────────────────────────────────────────
+export interface InvitePayload {
+  studentId: string;
+  email: string;
+  name: string;
+  inviteUrl: string;
+}
+
+export async function sendInvites(
+  invites: InvitePayload[], assignmentTitle: string, subject: string, body: string
+): Promise<{ studentId: string; status: 'sent' | 'failed'; error?: string }[]> {
+  const res = await fetch(`${API_BASE}/send-invites`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ invites, assignmentTitle, subject, body }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || 'Send invites failed');
+  }
+  const data = await res.json();
+  return (data as any).results;
+}

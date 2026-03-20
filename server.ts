@@ -4,6 +4,7 @@ import cors from 'cors';
 import multer from 'multer';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import sharp from 'sharp';
+import nodemailer from 'nodemailer';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
@@ -287,6 +288,176 @@ app.post('/api/transcribe-and-analyze', async (req, res) => {
   } catch (err) {
     console.error('/api/transcribe-and-analyze error:', err);
     res.status(500).json({ error: 'Transcription/analysis failed.' });
+  }
+});
+
+// ─── Extract text from a Firebase Storage URL ────────────────────────────────
+app.post('/api/extract-text', async (req, res) => {
+  try {
+    const { url } = req.body as { url: string };
+    if (!url) { res.status(400).json({ error: 'url required' }); return; }
+    const fileRes = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+    if (!fileRes.ok) { res.status(502).json({ error: `Failed to fetch file: ${fileRes.status}` }); return; }
+    const contentType = fileRes.headers.get('content-type') || '';
+    const buffer = Buffer.from(await fileRes.arrayBuffer());
+    // Plain text / markdown
+    if (contentType.includes('text/') || url.endsWith('.txt') || url.endsWith('.md')) {
+      res.json({ text: buffer.toString('utf-8').slice(0, 20000) });
+      return;
+    }
+    // For PDF / DOCX: use Gemini to extract visible text from first few pages
+    const base64 = buffer.toString('base64');
+    const mimeType = contentType.split(';')[0] || 'application/octet-stream';
+    const result = await gemini('Document text extractor.').generateContent([
+      { inlineData: { mimeType, data: base64 } },
+      { text: 'Extract all text from this document. Return plain text only, no markdown, no commentary.' },
+    ]);
+    res.json({ text: result.response.text().slice(0, 20000) });
+  } catch (err: any) {
+    console.error('/api/extract-text error:', err);
+    res.status(500).json({ error: 'Text extraction failed.', detail: String(err?.message || err) });
+  }
+});
+
+// ─── Generate assignment summary + generic questions ─────────────────────────
+app.post('/api/generate-assignment-summary', async (req, res) => {
+  try {
+    const { briefText, rubricText, questionCount = 12 } = req.body as {
+      briefText: string; rubricText?: string; questionCount?: number;
+    };
+    if (!briefText) { res.status(400).json({ error: 'briefText required' }); return; }
+    const effectiveRubric = await ensureRubric(briefText, rubricText);
+
+    // Summary paragraph
+    const summaryResult = await gemini('Academic assignment analyst.').generateContent(
+      `Write a concise 2–3 sentence summary of this assignment for the professor's dashboard:\n\n${briefText}\n\nFocus on learning objectives, deliverables, and assessment criteria. Plain text only.`
+    );
+    const summaryText = summaryResult.response.text().trim();
+
+    // Generic questions
+    const prompt =
+      `Generate exactly ${questionCount} oral interview questions suitable for ANY student doing this assignment.\n\n` +
+      `Assignment brief:\n${briefText}\n\nGrading rubric:\n${effectiveRubric}\n\n` +
+      'These are generic questions asked before submission-specific questions. Focus on understanding, not recall.\n' +
+      'Return JSON array ONLY. Each: { "textEn", "textAr", "order", "followUpEn", "followUpAr" }';
+    const qResult = await gemini('Academic integrity interviewer.').generateContent(prompt);
+    const questions = JSON.parse(parseJsonResponse(qResult.response.text()));
+
+    res.json({ summaryText, questions, rubricText: effectiveRubric });
+  } catch (err: any) {
+    console.error('/api/generate-assignment-summary error:', err);
+    res.status(500).json({ error: 'Summary generation failed.', detail: String(err?.message || err) });
+  }
+});
+
+// ─── Generate per-student questions from their submission ─────────────────────
+app.post('/api/generate-student-questions', async (req, res) => {
+  try {
+    const { submissionText, briefText, rubricText, genericQuestions = [], courseOutline, count = 8 } = req.body as {
+      submissionText: string; briefText: string; rubricText?: string;
+      genericQuestions?: { textEn: string }[]; courseOutline?: string; count?: number;
+    };
+    if (!submissionText || !briefText) { res.status(400).json({ error: 'submissionText and briefText required' }); return; }
+    const effectiveRubric = await ensureRubric(briefText, rubricText);
+
+    const genericList = genericQuestions.map((q, i) => `${i + 1}. ${q.textEn}`).join('\n');
+    const prompt =
+      `You are generating oral interview questions SPECIFIC to one student's submission.\n\n` +
+      `Assignment brief:\n${briefText}\n\nRubric:\n${effectiveRubric}\n` +
+      (courseOutline ? `\nCourse outline:\n${courseOutline}\n` : '') +
+      `\nGeneric questions already asked:\n${genericList}\n\n` +
+      `Student submission:\n${submissionText}\n\n` +
+      `Generate exactly ${count} questions that reference specific content from THIS student's submission. ` +
+      `Quote exact phrases they wrote. Do NOT duplicate the generic questions above.\n` +
+      'Return JSON array ONLY. Each: { "textEn", "textAr", "order", "followUpEn", "followUpAr" }';
+
+    const result = await gemini('Academic integrity interviewer. Generate targeted per-student questions.').generateContent(prompt);
+    const questions = JSON.parse(parseJsonResponse(result.response.text()));
+    res.json({ questions });
+  } catch (err: any) {
+    console.error('/api/generate-student-questions error:', err);
+    res.status(500).json({ error: 'Student question generation failed.', detail: String(err?.message || err) });
+  }
+});
+
+// ─── Send invite emails ───────────────────────────────────────────────────────
+function buildInviteEmailHtml(studentName: string, assignmentTitle: string, inviteUrl: string): string {
+  return `<!DOCTYPE html>
+<html>
+<body style="font-family: Georgia, serif; color: #1c1917; max-width: 600px; margin: 40px auto; padding: 0 20px;">
+  <h2 style="color: #059669; font-weight: normal;">TeachAId — Interview Invitation</h2>
+  <p>Dear ${studentName},</p>
+  <p>You have been invited to complete an integrity interview for the following assignment:</p>
+  <p style="background:#f5f5f4; border-left: 3px solid #059669; padding: 12px 16px; border-radius: 4px;">
+    <strong>${assignmentTitle}</strong>
+  </p>
+  <p>Please click the link below to start your interview session. The link is personal and single-use.</p>
+  <p style="margin: 24px 0;">
+    <a href="${inviteUrl}" style="background: #059669; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-size: 15px;">
+      Start My Interview
+    </a>
+  </p>
+  <p style="color: #78716c; font-size: 13px;">If the button doesn't work, copy and paste this link:<br>
+    <a href="${inviteUrl}" style="color: #059669;">${inviteUrl}</a>
+  </p>
+  <hr style="border: none; border-top: 1px solid #e7e5e4; margin: 32px 0;" />
+  <p style="color: #a8a29e; font-size: 12px;">This email was sent by your professor via TeachAId. Do not reply to this email.</p>
+</body>
+</html>`;
+}
+
+app.post('/api/send-invites', async (req, res) => {
+  try {
+    const { invites, assignmentTitle, subject, body } = req.body as {
+      invites: { studentId: string; email: string; name: string; inviteUrl: string }[];
+      assignmentTitle: string;
+      subject: string;
+      body: string;
+    };
+    if (!invites?.length) { res.status(400).json({ error: 'invites array required' }); return; }
+
+    const smtpHost = process.env.SMTP_HOST;
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+    const smtpFrom = process.env.SMTP_FROM || smtpUser;
+    const smtpPort = parseInt(process.env.SMTP_PORT || '587');
+
+    if (!smtpHost || !smtpUser || !smtpPass) {
+      res.status(503).json({ error: 'Email not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM in environment.' });
+      return;
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: smtpHost, port: smtpPort, secure: smtpPort === 465,
+      auth: { user: smtpUser, pass: smtpPass },
+    });
+
+    const results: { studentId: string; status: 'sent' | 'failed'; error?: string }[] = [];
+    for (const invite of invites) {
+      try {
+        const personalizedSubject = subject.replace(/\{\{name\}\}/g, invite.name).replace(/\{\{assignment\}\}/g, assignmentTitle);
+        const personalizedBody = body
+          .replace(/\{\{name\}\}/g, invite.name)
+          .replace(/\{\{assignment\}\}/g, assignmentTitle)
+          .replace(/\{\{link\}\}/g, invite.inviteUrl);
+        const htmlBody = buildInviteEmailHtml(invite.name, assignmentTitle, invite.inviteUrl);
+        // Use professor's custom body if it differs from default, else use HTML template
+        const useCustom = body.trim().length > 0;
+        await transporter.sendMail({
+          from: smtpFrom, to: invite.email,
+          subject: personalizedSubject,
+          text: useCustom ? personalizedBody : `Dear ${invite.name},\n\nYou are invited to complete an integrity interview for: ${assignmentTitle}\n\nStart here: ${invite.inviteUrl}`,
+          html: useCustom ? `<pre style="font-family: inherit;">${personalizedBody}</pre>` : htmlBody,
+        });
+        results.push({ studentId: invite.studentId, status: 'sent' });
+      } catch (err: any) {
+        results.push({ studentId: invite.studentId, status: 'failed', error: err.message });
+      }
+    }
+    res.json({ results });
+  } catch (err: any) {
+    console.error('/api/send-invites error:', err);
+    res.status(500).json({ error: 'Send invites failed.', detail: String(err?.message || err) });
   }
 });
 

@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
-import { Assignment, Student, Submission, InterviewSession } from '../types';
+import {
+  collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc,
+} from 'firebase/firestore';
+import { Assignment, Student, InterviewSession } from '../types';
 import {
   UserPlus, Mail, Link as LinkIcon, CheckCircle2, Clock,
-  AlertCircle, FileText, Loader2, X,
+  AlertCircle, FileText, Loader2, X, Upload, Send, CheckSquare, Square,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import ReportViewer from './ReportViewer';
+import ClassRosterUpload from './ClassRosterUpload';
+import { sendInvites } from '../lib/claude';
 
 interface Props {
   assignment: Assignment;
@@ -21,20 +25,28 @@ export default function StudentList({ assignment, onClose }: Props) {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedStudentIndex, setSelectedStudentIndex] = useState<number | null>(null);
   const [showAddStudent, setShowAddStudent] = useState(false);
+  const [showUploadRoster, setShowUploadRoster] = useState(false);
+
+  // Checkbox state
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+
+  // Email preview modal
+  const [showEmailModal, setShowEmailModal] = useState(false);
 
   useEffect(() => {
-    // Only load students enrolled in this assignment's course
     const qStudents = query(
       collection(db, 'students'),
       where('institutionId', '==', assignment.educatorId || 'ashraf-institution')
     );
     const unsubStudents = onSnapshot(qStudents, snap => {
       const all = snap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
-      // Filter to this course only — students belong to exactly one course
-      setStudents(all.filter(s => s.courseId === assignment.courseId));
+      // Students belong to this course OR are assignment-scoped to this assignment
+      setStudents(all.filter(s =>
+        s.courseId === assignment.courseId ||
+        (s.assignmentIds && s.assignmentIds.includes(assignment.id))
+      ));
     });
 
-    // Filtered to this assignment only
     const qSessions = query(collection(db, 'interviewSessions'), where('assignmentId', '==', assignment.id));
     const unsubSessions = onSnapshot(qSessions, snap => {
       setSessions(snap.docs.map(d => ({ id: d.id, ...d.data() } as InterviewSession)));
@@ -42,46 +54,57 @@ export default function StudentList({ assignment, onClose }: Props) {
     });
 
     return () => { unsubStudents(); unsubSessions(); };
-  }, [assignment.id, assignment.educatorId]);
+  }, [assignment.id, assignment.educatorId, assignment.courseId]);
 
-  // Secure token: crypto.randomUUID() → store token hash via SHA-256
-  const generateSecureToken = async (): Promise<string> => {
+  // Generate invite token and return the URL (does not alert/copy automatically)
+  const generateInviteUrl = async (student: Student): Promise<string> => {
     const uuid = crypto.randomUUID();
-    // Store raw token in URL, store SHA-256 hash in Firestore
     const encoder = new TextEncoder();
-    const data = encoder.encode(uuid);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    return JSON.stringify({ raw: uuid, hash: hashHex });
+    const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(uuid));
+    const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    const expiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    await addDoc(collection(db, 'inviteTokens'), {
+      studentId: student.id,
+      assignmentId: assignment.id,
+      tokenHash: hashHex,
+      expiry,
+      issuedBy: assignment.educatorId || 'educator',
+      createdAt: serverTimestamp(),
+    });
+    return `${window.location.origin}/?token=${uuid}`;
   };
 
   const generateInvite = async (student: Student) => {
     try {
-      const tokenData = JSON.parse(await generateSecureToken());
-      const expiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-      await addDoc(collection(db, 'inviteTokens'), {
-        studentId: student.id,
-        assignmentId: assignment.id,
-        tokenHash: tokenData.hash,
-        expiry,
-        issuedBy: assignment.educatorId || 'educator',
-        createdAt: serverTimestamp(),
-      });
-      const url = `${window.location.origin}/?token=${tokenData.raw}`;
-      // Copy to clipboard and show
+      const url = await generateInviteUrl(student);
       await navigator.clipboard.writeText(url).catch(() => {});
-      alert(`Invite link generated and copied to clipboard:\n\n${url}\n\nThis link expires on ${new Date(expiry).toLocaleDateString()}.`);
+      alert(`Invite link copied to clipboard:\n\n${url}`);
     } catch (err) {
-      console.error(err);
       alert('Failed to generate invite link.');
     }
   };
 
-  const reviewedSessions = sessions.filter(s => s.status === 'REVIEWED').length;
-  const completedSessions = sessions.filter(s => ['AWAITING_REVIEW', 'REVIEWED', 'AWAITING_PROCESSING'].includes(s.status)).length;
+  const toggleCheck = (id: string) => {
+    setCheckedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
 
-  // Navigate between students in report view
+  const toggleAll = () => {
+    if (checkedIds.size === students.length) {
+      setCheckedIds(new Set());
+    } else {
+      setCheckedIds(new Set(students.map(s => s.id)));
+    }
+  };
+
+  const reviewedSessions = sessions.filter(s => s.status === 'REVIEWED').length;
+  const completedSessions = sessions.filter(s =>
+    ['AWAITING_REVIEW', 'REVIEWED', 'AWAITING_PROCESSING', 'INCOMPLETE'].includes(s.status)
+  ).length;
+
   const studentsWithSessions = students.filter(s => sessions.some(sess => sess.studentId === s.id));
 
   const openReport = (student: Student, idx: number) => {
@@ -95,7 +118,8 @@ export default function StudentList({ assignment, onClose }: Props) {
   if (selectedSessionId) {
     return (
       <div>
-        <button onClick={() => setSelectedSessionId(null)} className="text-stone-400 hover:text-stone-600 text-sm mb-4 flex items-center gap-1">
+        <button onClick={() => setSelectedSessionId(null)}
+          className="text-stone-400 hover:text-stone-600 text-sm mb-4 flex items-center gap-1">
           ← Back to Student List
         </button>
         <ReportViewer
@@ -115,64 +139,105 @@ export default function StudentList({ assignment, onClose }: Props) {
     );
   }
 
+  const selectedStudents = students.filter(s => checkedIds.has(s.id) && s.email);
+  const allChecked = students.length > 0 && checkedIds.size === students.length;
+  const someChecked = checkedIds.size > 0 && checkedIds.size < students.length;
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-xl font-serif font-medium text-stone-900">{assignment.title}</h2>
           <p className="text-sm text-stone-500 mt-1">
             {completedSessions} of {students.length} completed &bull; {reviewedSessions} reviewed
           </p>
         </div>
-        <button
-          onClick={() => setShowAddStudent(true)}
-          className="flex items-center gap-2 text-sm font-medium text-emerald-600 hover:text-emerald-700"
-        >
-          <UserPlus className="w-4 h-4" />
-          Add Student
-        </button>
+        <div className="flex items-center gap-2">
+          {checkedIds.size > 0 && (
+            <button
+              onClick={() => setShowEmailModal(true)}
+              className="flex items-center gap-2 text-sm font-medium bg-emerald-600 text-white px-4 py-2 rounded-xl hover:bg-emerald-700 transition-colors"
+            >
+              <Send className="w-4 h-4" />
+              Send Invites ({checkedIds.size})
+            </button>
+          )}
+          <button onClick={() => setShowUploadRoster(true)}
+            className="flex items-center gap-2 text-sm font-medium text-stone-500 hover:text-stone-700 border border-stone-200 px-3 py-2 rounded-xl hover:bg-stone-50">
+            <Upload className="w-4 h-4" />
+            Upload Roster
+          </button>
+          <button onClick={() => setShowAddStudent(true)}
+            className="flex items-center gap-2 text-sm font-medium text-emerald-600 hover:text-emerald-700">
+            <UserPlus className="w-4 h-4" />
+            Add Student
+          </button>
+        </div>
       </div>
 
+      {/* Student table */}
       <div className="bg-white rounded-3xl border border-stone-200 overflow-hidden">
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-stone-50 border-b border-stone-200">
-              <th className="px-6 py-4 text-xs font-bold text-stone-400 uppercase tracking-wider">Student</th>
-              <th className="px-6 py-4 text-xs font-bold text-stone-400 uppercase tracking-wider">ID</th>
-              <th className="px-6 py-4 text-xs font-bold text-stone-400 uppercase tracking-wider">Status</th>
-              <th className="px-6 py-4 text-xs font-bold text-stone-400 uppercase tracking-wider text-right">Actions</th>
+              <th className="px-4 py-4 w-10">
+                <button onClick={toggleAll} className="text-stone-400 hover:text-emerald-600">
+                  {allChecked
+                    ? <CheckSquare className="w-4 h-4 text-emerald-600" />
+                    : someChecked
+                    ? <CheckSquare className="w-4 h-4 text-stone-300" />
+                    : <Square className="w-4 h-4" />}
+                </button>
+              </th>
+              <th className="px-4 py-4 text-xs font-bold text-stone-400 uppercase tracking-wider">Student</th>
+              <th className="px-4 py-4 text-xs font-bold text-stone-400 uppercase tracking-wider">ID</th>
+              <th className="px-4 py-4 text-xs font-bold text-stone-400 uppercase tracking-wider">Status</th>
+              <th className="px-4 py-4 text-xs font-bold text-stone-400 uppercase tracking-wider text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-stone-100">
             {loading ? (
-              <tr><td colSpan={4} className="px-6 py-12 text-center text-stone-400"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></td></tr>
+              <tr><td colSpan={5} className="px-6 py-12 text-center text-stone-400">
+                <Loader2 className="w-6 h-6 animate-spin mx-auto" />
+              </td></tr>
             ) : students.length === 0 ? (
-              <tr><td colSpan={4} className="px-6 py-12 text-center text-stone-400 text-sm">No students added yet. Add students or upload a roster.</td></tr>
+              <tr><td colSpan={5} className="px-6 py-12 text-center text-stone-400 text-sm">
+                No students yet. Add students or upload a roster.
+              </td></tr>
             ) : (
               students.map((student, idx) => {
                 const session = sessions.find(s => s.studentId === student.id);
                 const sessionIdx = studentsWithSessions.indexOf(student);
+                const isChecked = checkedIds.has(student.id);
                 return (
-                  <tr key={student.id} className="hover:bg-stone-50/50 transition-colors">
-                    <td className="px-6 py-4">
+                  <tr key={student.id} className={cn('hover:bg-stone-50/50 transition-colors', isChecked && 'bg-emerald-50/30')}>
+                    <td className="px-4 py-4">
+                      <button onClick={() => toggleCheck(student.id)} className="text-stone-300 hover:text-emerald-600">
+                        {isChecked
+                          ? <CheckSquare className="w-4 h-4 text-emerald-600" />
+                          : <Square className="w-4 h-4" />}
+                      </button>
+                    </td>
+                    <td className="px-4 py-4">
                       <p className="text-sm font-medium text-stone-900">{student.name}</p>
                       <p className="text-xs text-stone-500">{student.email || 'No email'}</p>
                     </td>
-                    <td className="px-6 py-4 text-sm text-stone-600">{student.studentId}</td>
-                    <td className="px-6 py-4"><StatusBadge status={session?.status || 'NOT_STARTED'} /></td>
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-4 py-4 text-sm text-stone-600">{student.studentId}</td>
+                    <td className="px-4 py-4"><StatusBadge status={session?.status || 'NOT_STARTED'} /></td>
+                    <td className="px-4 py-4 text-right">
                       <div className="flex justify-end gap-2">
-                        <button onClick={() => generateInvite(student)} className="p-2 text-stone-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-all" title="Generate Invite Link">
+                        <button onClick={() => generateInvite(student)}
+                          className="p-2 text-stone-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-all"
+                          title="Copy Invite Link">
                           <LinkIcon className="w-4 h-4" />
                         </button>
                         {session && ['AWAITING_REVIEW', 'REVIEWED', 'AWAITING_PROCESSING'].includes(session.status) && (
-                          <button onClick={() => openReport(student, sessionIdx)} className="p-2 text-stone-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all" title="View Report">
+                          <button onClick={() => openReport(student, sessionIdx)}
+                            className="p-2 text-stone-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
+                            title="View Report">
                             <FileText className="w-4 h-4" />
                           </button>
                         )}
-                        <button className="p-2 text-stone-400 hover:text-stone-600 hover:bg-stone-100 rounded-xl transition-all" title="Send Reminder">
-                          <Mail className="w-4 h-4" />
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -183,12 +248,218 @@ export default function StudentList({ assignment, onClose }: Props) {
         </table>
       </div>
 
-      {showAddStudent && <AddStudentModal onClose={() => setShowAddStudent(false)} institutionId={assignment.educatorId || 'ashraf-institution'} courseId={assignment.courseId} />}
+      {/* Modals */}
+      {showAddStudent && (
+        <AddStudentModal
+          onClose={() => setShowAddStudent(false)}
+          institutionId={assignment.educatorId || 'ashraf-institution'}
+          courseId={assignment.courseId}
+        />
+      )}
+      {showUploadRoster && (
+        <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-2xl p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-serif font-medium text-stone-900">Upload Roster</h3>
+              <button onClick={() => setShowUploadRoster(false)} className="p-2 hover:bg-stone-100 rounded-full">
+                <X className="w-5 h-5 text-stone-400" />
+              </button>
+            </div>
+            <p className="text-xs text-stone-500 mb-4">
+              Students uploaded here are added to this assignment only (not the whole course) — useful for late registrations or differentiated assignments.
+            </p>
+            <ClassRosterUpload
+              courseId={assignment.courseId}
+              educatorId={assignment.educatorId}
+              assignmentId={assignment.id}
+              scope="assignment"
+              onClose={() => setShowUploadRoster(false)}
+              onUploaded={(count) => { setShowUploadRoster(false); }}
+            />
+          </div>
+        </div>
+      )}
+      {showEmailModal && (
+        <EmailPreviewModal
+          assignment={assignment}
+          selectedStudents={students.filter(s => checkedIds.has(s.id))}
+          generateInviteUrl={generateInviteUrl}
+          onClose={() => setShowEmailModal(false)}
+          onSent={() => { setShowEmailModal(false); setCheckedIds(new Set()); }}
+        />
+      )}
     </div>
   );
 }
 
-function AddStudentModal({ onClose, institutionId, courseId }: { onClose: () => void; institutionId: string; courseId: string }) {
+// ─── Email Preview Modal ──────────────────────────────────────────────────────
+function EmailPreviewModal({
+  assignment, selectedStudents, generateInviteUrl, onClose, onSent,
+}: {
+  assignment: Assignment;
+  selectedStudents: Student[];
+  generateInviteUrl: (s: Student) => Promise<string>;
+  onClose: () => void;
+  onSent: () => void;
+}) {
+  const defaultSubject = `Interview Invitation: ${assignment.title}`;
+  const defaultBody =
+    `Dear {{name}},\n\nYou have been invited to complete an integrity interview for:\n\n{{assignment}}\n\nPlease use the link below to start your session:\n\n{{link}}\n\nThis link is personal and single-use. It expires in 7 days.\n\nBest regards`;
+
+  const [subject, setSubject] = useState(defaultSubject);
+  const [body, setBody] = useState(defaultBody);
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const [sending, setSending] = useState(false);
+  const [results, setResults] = useState<{ name: string; status: 'sent' | 'failed' | 'no-email'; error?: string }[] | null>(null);
+
+  const eligible = selectedStudents.filter(s => !excluded.has(s.id));
+  const withEmail = eligible.filter(s => s.email);
+  const withoutEmail = eligible.filter(s => !s.email);
+
+  const toggleExclude = (id: string) => {
+    setExcluded(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const handleSend = async () => {
+    if (withEmail.length === 0) return;
+    setSending(true);
+    try {
+      // Generate invite URLs for all eligible students with email
+      const invites = await Promise.all(
+        withEmail.map(async s => ({
+          studentId: s.id,
+          email: s.email!,
+          name: s.name,
+          inviteUrl: await generateInviteUrl(s),
+        }))
+      );
+      const sendResults = await sendInvites(invites, assignment.title, subject, body);
+      const display = sendResults.map(r => {
+        const student = withEmail.find(s => s.id === r.studentId);
+        return { name: student?.name || r.studentId, status: r.status, error: r.error };
+      });
+      // Add students without email as skipped
+      withoutEmail.forEach(s => display.push({ name: s.name, status: 'no-email' }));
+      setResults(display);
+    } catch (err: any) {
+      alert(`Send failed: ${err.message}`);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (results) {
+    return (
+      <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-lg p-8">
+          <h3 className="text-lg font-serif font-medium text-stone-900 mb-4">Send Results</h3>
+          <div className="space-y-2 mb-6 max-h-60 overflow-y-auto">
+            {results.map((r, i) => (
+              <div key={i} className={cn('flex items-center justify-between px-4 py-2 rounded-xl text-sm',
+                r.status === 'sent' ? 'bg-emerald-50' : r.status === 'no-email' ? 'bg-stone-50' : 'bg-red-50')}>
+                <span className="font-medium text-stone-800">{r.name}</span>
+                <span className={cn('text-xs font-bold uppercase',
+                  r.status === 'sent' ? 'text-emerald-600' : r.status === 'no-email' ? 'text-stone-400' : 'text-red-600')}>
+                  {r.status === 'no-email' ? 'No email' : r.status}
+                </span>
+              </div>
+            ))}
+          </div>
+          <button onClick={onSent} className="w-full bg-stone-900 text-white py-3 rounded-2xl font-medium hover:bg-stone-800">
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        <div className="p-6 border-b border-stone-100 flex justify-between items-center">
+          <div>
+            <h3 className="text-lg font-serif font-medium text-stone-900">Send Interview Invitations</h3>
+            <p className="text-xs text-stone-400 mt-0.5">Review list and email before sending. This action cannot be undone.</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-stone-100 rounded-full">
+            <X className="w-5 h-5 text-stone-400" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* Recipient list */}
+          <div>
+            <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">
+              Recipients — {withEmail.length} will receive email
+            </p>
+            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+              {selectedStudents.map(s => (
+                <div key={s.id} className={cn('flex items-center justify-between px-3 py-2 rounded-xl text-sm',
+                  excluded.has(s.id) ? 'bg-stone-50 opacity-50' : 'bg-stone-50')}>
+                  <div>
+                    <span className="font-medium text-stone-800">{s.name}</span>
+                    <span className="text-stone-400 ml-2 text-xs">{s.email || 'No email — will be skipped'}</span>
+                  </div>
+                  <button onClick={() => toggleExclude(s.id)}
+                    className="text-xs text-stone-400 hover:text-red-500 ml-3">
+                    {excluded.has(s.id) ? 'Include' : 'Exclude'}
+                  </button>
+                </div>
+              ))}
+            </div>
+            {withoutEmail.length > 0 && (
+              <p className="text-xs text-amber-600 mt-2">
+                {withoutEmail.length} student{withoutEmail.length > 1 ? 's' : ''} have no email and will be skipped.
+              </p>
+            )}
+          </div>
+
+          {/* Email subject */}
+          <div>
+            <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Subject</label>
+            <input value={subject} onChange={e => setSubject(e.target.value)}
+              className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
+          </div>
+
+          {/* Email body */}
+          <div>
+            <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Message Body</label>
+            <p className="text-xs text-stone-400 mb-2">
+              Use <code className="bg-stone-100 px-1 rounded">{'{{name}}'}</code>,{' '}
+              <code className="bg-stone-100 px-1 rounded">{'{{assignment}}'}</code>,{' '}
+              <code className="bg-stone-100 px-1 rounded">{'{{link}}'}</code> as placeholders.
+            </p>
+            <textarea value={body} onChange={e => setBody(e.target.value)} rows={8}
+              className="w-full px-4 py-3 bg-stone-50 border border-stone-200 rounded-xl text-sm font-mono focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 resize-none" />
+          </div>
+        </div>
+
+        <div className="p-6 border-t border-stone-100 flex gap-3">
+          <button onClick={onClose} className="flex-1 py-3 border border-stone-200 rounded-2xl text-sm font-medium text-stone-600 hover:bg-stone-50">
+            Cancel
+          </button>
+          <button
+            onClick={handleSend}
+            disabled={sending || withEmail.length === 0}
+            className="flex-1 bg-emerald-600 text-white py-3 rounded-2xl font-medium hover:bg-emerald-700 disabled:opacity-40 flex items-center justify-center gap-2"
+          >
+            {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            {sending ? 'Sending…' : `Send to ${withEmail.length} student${withEmail.length !== 1 ? 's' : ''}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Add Student Modal ────────────────────────────────────────────────────────
+function AddStudentModal({ onClose, institutionId, courseId }: {
+  onClose: () => void; institutionId: string; courseId: string;
+}) {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
   const [email, setEmail] = useState('');
@@ -220,22 +491,27 @@ function AddStudentModal({ onClose, institutionId, courseId }: { onClose: () => 
       <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-md">
         <div className="p-6 border-b border-stone-100 flex justify-between items-center">
           <h3 className="text-lg font-serif font-medium text-stone-900">Add Student</h3>
-          <button onClick={onClose} className="p-2 hover:bg-stone-100 rounded-full"><X className="w-5 h-5 text-stone-400" /></button>
+          <button onClick={onClose} className="p-2 hover:bg-stone-100 rounded-full">
+            <X className="w-5 h-5 text-stone-400" />
+          </button>
         </div>
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
             <label className="block text-sm font-medium text-stone-700 mb-1">Full Name *</label>
-            <input required type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Student's full name"
+            <input required type="text" value={name} onChange={e => setName(e.target.value)}
+              placeholder="Student's full name"
               className="w-full px-4 py-3 bg-stone-50 border border-stone-200 rounded-2xl text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
           </div>
           <div>
             <label className="block text-sm font-medium text-stone-700 mb-1">Student ID *</label>
-            <input required type="text" value={studentId} onChange={e => setStudentId(e.target.value)} placeholder="University student ID"
+            <input required type="text" value={studentId} onChange={e => setStudentId(e.target.value)}
+              placeholder="University student ID"
               className="w-full px-4 py-3 bg-stone-50 border border-stone-200 rounded-2xl text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
           </div>
           <div>
             <label className="block text-sm font-medium text-stone-700 mb-1">Email (optional)</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="student@university.edu"
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+              placeholder="student@university.edu"
               className="w-full px-4 py-3 bg-stone-50 border border-stone-200 rounded-2xl text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
           </div>
           <button type="submit" disabled={loading || !name.trim() || !studentId.trim()}
@@ -259,7 +535,7 @@ function StatusBadge({ status }: { status: string }) {
     AWAITING_REVIEW: { icon: AlertCircle, color: 'text-blue-600 bg-blue-50', label: 'Awaiting Review' },
     REVIEWED: { icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50', label: 'Reviewed' },
     INCOMPLETE: { icon: AlertCircle, color: 'text-red-600 bg-red-50', label: 'Incomplete' },
-    PROCESSING_FAILED: { icon: AlertCircle, color: 'text-red-600 bg-red-50', label: 'Processing Failed' },
+    PROCESSING_FAILED: { icon: AlertCircle, color: 'text-red-600 bg-red-50', label: 'Failed' },
     EXPIRED: { icon: Clock, color: 'text-stone-400 bg-stone-100', label: 'Expired' },
   };
 

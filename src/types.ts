@@ -49,6 +49,8 @@ export interface Assignment {
   responseTimeLimit: number;
   captureMode: 'Snapshot' | 'Video';
   status: 'Draft' | 'Processing' | 'Ready' | 'Active' | 'Closed' | 'Archived';
+  summaryText?: string;
+  summaryGeneratedAt?: string;
 }
 
 export interface Student {
@@ -58,6 +60,19 @@ export interface Student {
   email?: string;
   institutionId: string;
   courseId: string;
+  assignmentIds?: string[];  // set when student is added to a specific assignment only
+}
+
+export interface EmailLog {
+  id?: string;
+  studentId: string;
+  assignmentId: string;
+  email: string;
+  subject: string;
+  sentAt: string;
+  status: 'sent' | 'failed';
+  errorMessage?: string;
+  sentBy: string;
 }
 
 export interface Submission {
