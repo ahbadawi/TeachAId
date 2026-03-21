@@ -130,13 +130,20 @@ export interface InvitePayload {
   inviteUrl: string;
 }
 
+export async function getSmtpAccounts(): Promise<{ key: string; label: string; from: string }[]> {
+  const res = await fetch(`${API_BASE}/smtp-accounts`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
 export async function sendInvites(
-  invites: InvitePayload[], assignmentTitle: string, subject: string, body: string
+  invites: InvitePayload[], assignmentTitle: string, subject: string, body: string,
+  fromAccount?: string
 ): Promise<{ studentId: string; status: 'sent' | 'failed'; error?: string }[]> {
   const res = await fetch(`${API_BASE}/send-invites`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ invites, assignmentTitle, subject, body }),
+    body: JSON.stringify({ invites, assignmentTitle, subject, body, fromAccount }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

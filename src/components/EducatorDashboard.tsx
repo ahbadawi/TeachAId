@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '../firebase';
-import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, getDocs } from 'firebase/firestore';
 import { Educator, Course, Assignment, InterviewSession } from '../types';
-import { Plus, BookOpen, ClipboardList, Settings, LogOut, Search, Bell, Loader2, History, Save, FileText } from 'lucide-react';
+import { Plus, BookOpen, ClipboardList, LogOut, Search, Bell, Loader2, History, FileText, ShieldCheck } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import CreateAssignment from './CreateAssignment';
@@ -10,6 +10,7 @@ import CreateCourse from './CreateCourse';
 import CourseDetail from './CourseDetail';
 import AssignmentDetail from './AssignmentDetail';
 import AuditLogs from './AuditLogs';
+import AdminPanel from './AdminPanel';
 
 interface Props {
   educator: Educator;
@@ -37,7 +38,7 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
   const [courses, setCourses] = useState<Course[]>(isDev ? DEV_COURSES : []);
   const [assignments, setAssignments] = useState<Assignment[]>(isDev ? DEV_ASSIGNMENTS : []);
   const [sessions, setSessions] = useState<InterviewSession[]>(isDev ? DEV_SESSIONS : []);
-  const [activeTab, setActiveTab] = useState<'overview' | 'assignments' | 'courses' | 'logs' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'assignments' | 'courses' | 'logs' | 'admin'>('overview');
   const [showCreateAssignment, setShowCreateAssignment] = useState(false);
   const [showCreateCourse, setShowCreateCourse] = useState(false);
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
@@ -124,9 +125,9 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
               active={activeTab === 'logs'}
               onClick={() => setActiveTab('logs')} />
           )}
-          <NavItem icon={<Settings className="w-5 h-5" />} label="Settings"
-            active={activeTab === 'settings'}
-            onClick={() => setActiveTab('settings')} />
+          <NavItem icon={<ShieldCheck className="w-5 h-5" />} label="Admin"
+            active={activeTab === 'admin'}
+            onClick={() => setActiveTab('admin')} />
         </nav>
 
         <div className="p-4 border-t border-stone-100">
@@ -316,7 +317,9 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
               )}
 
               {activeTab === 'logs' && <AuditLogs />}
-              {activeTab === 'settings' && <SettingsPanel educatorId={educator.id} />}
+              {activeTab === 'admin' && (
+                <AdminPanel educatorId={educator.id} institutionId={educator.institutionId} />
+              )}
             </motion.div>
           )}
         </div>
@@ -407,227 +410,3 @@ function AssignmentCard({ assignment, stats, courseName, studentCount }: {
   );
 }
 
-const TEST_STUDENTS = [
-  { name: 'Ashraf (ZC)', email: 'abadawi@zewailcity.edu.eg', studentId: 'test-zc-001' },
-  { name: 'Ashraf (UPM)', email: 'a.badawi@upm.edu.sa', studentId: 'test-upm-002' },
-  { name: 'Ashraf (Gmail)', email: 'ashraf.badawi@gmail.com', studentId: 'test-gmail-003' },
-];
-
-const REAL_COURSES = [
-  { name: 'CSAI-490: Selected Topics in Computational Sciences', institutionId: 'zewail-city', defaultQuestionCount: 12 },
-  { name: 'ITNS-407: IT Audit and Risk Management', institutionId: 'zewail-city', defaultQuestionCount: 10 },
-  { name: 'CSAI-499: Senior Project Part 2', institutionId: 'zewail-city', defaultQuestionCount: 8 },
-  { name: 'CS-224: Computer Architecture (Monday Section)', institutionId: 'upm', defaultQuestionCount: 12 },
-  { name: 'CS-224: Computer Architecture (Friday Section)', institutionId: 'upm', defaultQuestionCount: 12 },
-  { name: 'AI-372: AI Ethics & Professionalism', institutionId: 'upm', defaultQuestionCount: 10 },
-];
-
-function SettingsPanel({ educatorId }: { educatorId: string }) {
-  const storageKey = `teachaid_settings_${educatorId}`;
-  const saved = JSON.parse(localStorage.getItem(storageKey) || '{}');
-
-  const [defaultCaptureMode, setDefaultCaptureMode] = useState<'Snapshot' | 'Video'>(saved.defaultCaptureMode ?? 'Snapshot');
-  const [defaultQuestionCount, setDefaultQuestionCount] = useState<number>(saved.defaultQuestionCount ?? 12);
-  const [defaultResponseTime, setDefaultResponseTime] = useState<number>(saved.defaultResponseTime ?? 60);
-  const [testingMode, setTestingMode] = useState<boolean>(saved.testingMode ?? false);
-  const [saved_, setSaved_] = useState(false);
-  const [seeding, setSeeding] = useState(false);
-  const [seedLinks, setSeedLinks] = useState<{ name: string; email: string; url: string }[] | null>(null);
-  const [seedError, setSeedError] = useState<string | null>(null);
-  const [seedingCourses, setSeedingCourses] = useState(false);
-  const [coursesSeeded, setCoursesSeeded] = useState(false);
-  const [courseSeedError, setCourseSeedError] = useState<string | null>(null);
-
-  const seedTestData = async () => {
-    setSeeding(true);
-    setSeedError(null);
-    setSeedLinks(null);
-    try {
-      console.log('[seed] step 1: create course');
-      const courseRef = await addDoc(collection(db, 'courses'), {
-        name: 'Test Interview Class', description: 'Seed data for testing the student interview flow.',
-        educatorId, institutionId: 'ashraf-institution', defaultLanguagePair: 'en',
-        defaultQuestionCount: 3, defaultCaptureMode: 'Snapshot', createdAt: serverTimestamp(),
-      });
-      console.log('[seed] step 1 OK:', courseRef.id);
-
-      const windowOpen = new Date().toISOString();
-      const windowClose = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-      console.log('[seed] step 2: create assignment');
-      const assignmentRef = await addDoc(collection(db, 'assignments'), {
-        title: 'Test: Sample Interview Assignment', courseId: courseRef.id, educatorId,
-        windowOpen, windowClose, questionCount: 3, questionMode: 'Manual', responseTimeLimit: 60,
-        captureMode: 'Snapshot', status: 'Active', createdAt: serverTimestamp(),
-      });
-      console.log('[seed] step 2 OK:', assignmentRef.id);
-
-      console.log('[seed] step 3: create questions');
-      for (const [i, q] of [
-        { textEn: 'Please introduce yourself and briefly describe your academic background.', textAr: 'يرجى تقديم نفسك ووصف خلفيتك الأكاديمية باختصار.' },
-        { textEn: 'Describe the main idea of a recent assignment or project you worked on.', textAr: 'صف الفكرة الرئيسية لمشروع أو تكليف أخير عملت عليه.' },
-        { textEn: 'What was the most challenging part of that work, and how did you handle it?', textAr: 'ما هو الجزء الأصعب في ذلك العمل، وكيف تعاملت معه؟' },
-      ].entries()) {
-        await addDoc(collection(db, 'assignments', assignmentRef.id, 'questions'), { ...q, order: i });
-        console.log('[seed] question', i, 'OK');
-      }
-
-      console.log('[seed] step 4: create students + tokens');
-      const links: { name: string; email: string; url: string }[] = [];
-      for (const s of TEST_STUDENTS) {
-        const studentRef = await addDoc(collection(db, 'students'), {
-          name: s.name, email: s.email, studentId: s.studentId,
-          institutionId: educatorId, courseId: courseRef.id, createdAt: serverTimestamp(),
-        });
-        const rawToken = crypto.randomUUID();
-        const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rawToken));
-        const tokenHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-        await addDoc(collection(db, 'inviteTokens'), {
-          studentId: studentRef.id, assignmentId: assignmentRef.id, tokenHash,
-          expiry: windowClose, issuedBy: educatorId, createdAt: serverTimestamp(),
-        });
-        links.push({ name: s.name, email: s.email, url: `${window.location.origin}/?token=${rawToken}` });
-      }
-      setSeedLinks(links);
-    } catch (err: any) {
-      console.error('Seed error:', err);
-      setSeedError(err?.message || 'Seeding failed. Check Firestore rules and console.');
-    } finally {
-      setSeeding(false);
-    }
-  };
-
-  const seedCourses = async () => {
-    setSeedingCourses(true);
-    setCourseSeedError(null);
-    try {
-      for (const c of REAL_COURSES) {
-        await addDoc(collection(db, 'courses'), {
-          name: c.name, educatorId, institutionId: c.institutionId,
-          defaultLanguagePair: 'en', defaultQuestionCount: c.defaultQuestionCount,
-          defaultCaptureMode: 'Snapshot', createdAt: serverTimestamp(),
-        });
-      }
-      setCoursesSeeded(true);
-    } catch (err: any) {
-      setCourseSeedError(err?.message || 'Failed to create courses.');
-    } finally {
-      setSeedingCourses(false);
-    }
-  };
-
-  const handleSave = () => {
-    localStorage.setItem(storageKey, JSON.stringify({ defaultCaptureMode, defaultQuestionCount, defaultResponseTime, testingMode }));
-    setSaved_(true);
-    setTimeout(() => setSaved_(false), 2000);
-  };
-
-  return (
-    <div className="max-w-2xl space-y-8">
-      <h2 className="text-2xl font-serif font-medium text-stone-900">Settings</h2>
-
-      <section className="bg-white rounded-3xl border border-stone-200 p-6 space-y-6">
-        <h3 className="text-sm font-bold text-stone-400 uppercase tracking-wider">Assignment Defaults</h3>
-        <div>
-          <label className="block text-sm font-medium text-stone-700 mb-2">Default Capture Mode</label>
-          <div className="flex bg-stone-100 p-1 rounded-xl w-48">
-            {(['Snapshot', 'Video'] as const).map(m => (
-              <button key={m} onClick={() => setDefaultCaptureMode(m)}
-                className={cn('flex-1 py-1.5 text-xs font-medium rounded-lg transition-all',
-                  defaultCaptureMode === m ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500')}>
-                {m}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-stone-700 mb-1">
-            Default Question Count: <span className="text-emerald-600 font-bold">{defaultQuestionCount}</span>
-          </label>
-          <input type="range" min="8" max="16" value={defaultQuestionCount}
-            onChange={e => setDefaultQuestionCount(parseInt(e.target.value))}
-            className="w-full accent-emerald-600 max-w-xs" />
-          <div className="flex justify-between text-xs text-stone-400 mt-1 max-w-xs"><span>8</span><span>16</span></div>
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-stone-700 mb-1">
-            Default Response Time Limit: <span className="text-emerald-600 font-bold">{defaultResponseTime}s</span>
-          </label>
-          <input type="range" min="30" max="180" step="15" value={defaultResponseTime}
-            onChange={e => setDefaultResponseTime(parseInt(e.target.value))}
-            className="w-full accent-emerald-600 max-w-xs" />
-          <div className="flex justify-between text-xs text-stone-400 mt-1 max-w-xs"><span>30s</span><span>3m</span></div>
-        </div>
-      </section>
-
-      <section className="bg-white rounded-3xl border border-stone-200 p-6 space-y-4">
-        <h3 className="text-sm font-bold text-stone-400 uppercase tracking-wider">Developer</h3>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-stone-700">Testing Mode</p>
-            <p className="text-xs text-stone-400 mt-0.5">Reduces timers to 5 seconds. Do not enable in production.</p>
-          </div>
-          <button onClick={() => setTestingMode(v => !v)}
-            className={cn('relative w-12 h-6 rounded-full transition-colors', testingMode ? 'bg-amber-500' : 'bg-stone-200')}>
-            <span className={cn('absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all', testingMode ? 'left-7' : 'left-1')} />
-          </button>
-        </div>
-        {testingMode && (
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
-            <p className="text-xs text-amber-700 font-medium">Testing Mode is ON — all interview timers run at 5 seconds.</p>
-          </div>
-        )}
-      </section>
-
-      <section className="bg-white rounded-3xl border border-stone-200 p-6 space-y-4">
-        <h3 className="text-sm font-bold text-stone-400 uppercase tracking-wider">My Courses</h3>
-        <p className="text-xs text-stone-500 leading-relaxed">
-          Creates all 6 courses: CSAI-490, ITNS-407, CSAI-499, CS-224 (Monday), CS-224 (Friday), and AI-372.
-          Safe to run once — does not check for duplicates.
-        </p>
-        {courseSeedError && <p className="text-xs text-red-600">{courseSeedError}</p>}
-        {coursesSeeded ? (
-          <p className="text-xs text-emerald-700 font-medium">All 6 courses created. Go to the Courses tab.</p>
-        ) : (
-          <button onClick={seedCourses} disabled={seedingCourses}
-            className="flex items-center gap-2 bg-emerald-700 text-white px-5 py-2.5 rounded-2xl text-sm font-medium hover:bg-emerald-600 disabled:opacity-50">
-            {seedingCourses && <Loader2 className="w-4 h-4 animate-spin" />}
-            {seedingCourses ? 'Creating courses…' : 'Create My 6 Courses'}
-          </button>
-        )}
-      </section>
-
-      <section className="bg-white rounded-3xl border border-stone-200 p-6 space-y-4">
-        <h3 className="text-sm font-bold text-stone-400 uppercase tracking-wider">Test Data</h3>
-        <p className="text-xs text-stone-500 leading-relaxed">
-          Creates a "Test Interview Class" with a 3-question assignment and invite links for 3 test accounts. Links are valid 7 days.
-        </p>
-        {seedError && <p className="text-xs text-red-600">{seedError}</p>}
-        {seedLinks ? (
-          <div className="space-y-3">
-            <p className="text-xs font-semibold text-emerald-700">Test links generated:</p>
-            {seedLinks.map(l => (
-              <div key={l.email} className="bg-stone-50 border border-stone-100 rounded-2xl p-3">
-                <p className="text-xs font-medium text-stone-700 mb-1">{l.name} — {l.email}</p>
-                <input readOnly value={l.url} onClick={e => (e.target as HTMLInputElement).select()}
-                  className="w-full text-xs font-mono bg-white border border-stone-200 rounded-xl px-3 py-2 text-stone-600 cursor-text focus:outline-none" />
-              </div>
-            ))}
-            <p className="text-xs text-stone-400">Click each URL field to select, then copy.</p>
-          </div>
-        ) : (
-          <button onClick={seedTestData} disabled={seeding}
-            className="flex items-center gap-2 bg-stone-700 text-white px-5 py-2.5 rounded-2xl text-sm font-medium hover:bg-stone-600 disabled:opacity-50">
-            {seeding && <Loader2 className="w-4 h-4 animate-spin" />}
-            {seeding ? 'Creating test data…' : 'Create Test Class + Links'}
-          </button>
-        )}
-      </section>
-
-      <button onClick={handleSave}
-        className="flex items-center gap-2 bg-stone-900 text-white px-6 py-3 rounded-2xl text-sm font-medium hover:bg-stone-800 transition-colors">
-        <Save className="w-4 h-4" />
-        {saved_ ? 'Saved!' : 'Save Settings'}
-      </button>
-    </div>
-  );
-}

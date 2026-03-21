@@ -11,7 +11,7 @@ import {
 import { cn } from '../lib/utils';
 import ReportViewer from './ReportViewer';
 import ClassRosterUpload from './ClassRosterUpload';
-import { sendInvites } from '../lib/claude';
+import { sendInvites, getSmtpAccounts } from '../lib/claude';
 
 interface Props {
   assignment: Assignment;
@@ -153,15 +153,20 @@ export default function StudentList({ assignment, onClose }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {checkedIds.size > 0 && (
-            <button
-              onClick={() => setShowEmailModal(true)}
-              className="flex items-center gap-2 text-sm font-medium bg-emerald-600 text-white px-4 py-2 rounded-xl hover:bg-emerald-700 transition-colors"
-            >
-              <Send className="w-4 h-4" />
-              Send Invites ({checkedIds.size})
-            </button>
-          )}
+          <button
+            onClick={() => setShowEmailModal(true)}
+            disabled={checkedIds.size === 0}
+            className={cn(
+              'flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-xl transition-colors',
+              checkedIds.size > 0
+                ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                : 'bg-stone-100 text-stone-400 cursor-not-allowed'
+            )}
+            title={checkedIds.size === 0 ? 'Select students to send invites' : undefined}
+          >
+            <Send className="w-4 h-4" />
+            {checkedIds.size > 0 ? `Send Invites (${checkedIds.size})` : 'Send Invites'}
+          </button>
           <button onClick={() => setShowUploadRoster(true)}
             className="flex items-center gap-2 text-sm font-medium text-stone-500 hover:text-stone-700 border border-stone-200 px-3 py-2 rounded-xl hover:bg-stone-50">
             <Upload className="w-4 h-4" />
@@ -311,6 +316,15 @@ function EmailPreviewModal({
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
   const [results, setResults] = useState<{ name: string; status: 'sent' | 'failed' | 'no-email'; error?: string }[] | null>(null);
+  const [smtpAccounts, setSmtpAccounts] = useState<{ key: string; label: string; from: string }[]>([]);
+  const [fromAccount, setFromAccount] = useState<string>('gmail');
+
+  useEffect(() => {
+    getSmtpAccounts().then(accounts => {
+      setSmtpAccounts(accounts);
+      if (accounts.length > 0) setFromAccount(accounts[0].key);
+    });
+  }, []);
 
   const eligible = selectedStudents.filter(s => !excluded.has(s.id));
   const withEmail = eligible.filter(s => s.email);
@@ -337,7 +351,7 @@ function EmailPreviewModal({
           inviteUrl: await generateInviteUrl(s),
         }))
       );
-      const sendResults = await sendInvites(invites, assignment.title, subject, body);
+      const sendResults = await sendInvites(invites, assignment.title, subject, body, fromAccount);
       const display = sendResults.map(r => {
         const student = withEmail.find(s => s.id === r.studentId);
         return { name: student?.name || r.studentId, status: r.status, error: r.error };
@@ -415,6 +429,40 @@ function EmailPreviewModal({
               <p className="text-xs text-amber-600 mt-2">
                 {withoutEmail.length} student{withoutEmail.length > 1 ? 's' : ''} have no email and will be skipped.
               </p>
+            )}
+          </div>
+
+          {/* From account selector */}
+          <div>
+            <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Send From</label>
+            {smtpAccounts.length === 0 ? (
+              <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-xl">
+                No SMTP accounts configured. Set SMTP_* environment variables on the server.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {smtpAccounts.map(acc => (
+                  <label key={acc.key} className={cn(
+                    'flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-colors',
+                    fromAccount === acc.key
+                      ? 'border-emerald-400 bg-emerald-50'
+                      : 'border-stone-200 bg-stone-50 hover:border-stone-300'
+                  )}>
+                    <input
+                      type="radio"
+                      name="fromAccount"
+                      value={acc.key}
+                      checked={fromAccount === acc.key}
+                      onChange={() => setFromAccount(acc.key)}
+                      className="accent-emerald-600"
+                    />
+                    <div>
+                      <p className="text-sm font-medium text-stone-800">{acc.label}</p>
+                      <p className="text-xs text-stone-400">{acc.from}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
             )}
           </div>
 

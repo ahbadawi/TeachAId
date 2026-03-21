@@ -291,28 +291,71 @@ app.post('/api/transcribe-and-analyze', async (req, res) => {
   }
 });
 
+// ─── Extract file extension from Firebase Storage URL ────────────────────────
+function getExtFromUrl(url: string): string {
+  try {
+    // Firebase Storage URL: .../o/assignments%2Fbriefs%2F1234_file.pdf?alt=media&token=...
+    const pathname = new URL(url).pathname;
+    const decoded = decodeURIComponent(pathname);
+    const filename = decoded.split('/').pop() || '';
+    // Strip query string from filename in case it's included
+    return (filename.split('?')[0].split('.').pop() || '').toLowerCase();
+  } catch { return ''; }
+}
+
 // ─── Extract text from a Firebase Storage URL ────────────────────────────────
 app.post('/api/extract-text', async (req, res) => {
   try {
     const { url } = req.body as { url: string };
     if (!url) { res.status(400).json({ error: 'url required' }); return; }
-    const fileRes = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+
+    const fileRes = await fetch(url, { signal: AbortSignal.timeout(60_000) });
     if (!fileRes.ok) { res.status(502).json({ error: `Failed to fetch file: ${fileRes.status}` }); return; }
-    const contentType = fileRes.headers.get('content-type') || '';
+
     const buffer = Buffer.from(await fileRes.arrayBuffer());
-    // Plain text / markdown
-    if (contentType.includes('text/') || url.endsWith('.txt') || url.endsWith('.md')) {
+    const ext = getExtFromUrl(url);
+    const contentType = fileRes.headers.get('content-type') || '';
+
+    console.log(`[extract-text] url ext="${ext}" content-type="${contentType}" size=${buffer.length}`);
+
+    // Plain text
+    if (ext === 'txt' || ext === 'md' || contentType.includes('text/plain')) {
       res.json({ text: buffer.toString('utf-8').slice(0, 20000) });
       return;
     }
-    // For PDF / DOCX: use Gemini to extract visible text from first few pages
-    const base64 = buffer.toString('base64');
-    const mimeType = contentType.split(';')[0] || 'application/octet-stream';
+
+    // DOCX — try mammoth if available, otherwise fall through to Gemini
+    if (ext === 'docx' || ext === 'doc') {
+      try {
+        const mammoth = await import('mammoth');
+        const result = await mammoth.extractRawText({ buffer });
+        console.log(`[extract-text] mammoth extracted ${result.value.length} chars`);
+        res.json({ text: result.value.slice(0, 20000) });
+        return;
+      } catch (mammothErr) {
+        console.warn('[extract-text] mammoth unavailable, falling back to Gemini:', (mammothErr as any)?.message);
+        // Fall through to Gemini
+      }
+    }
+
+    // PDF or DOCX fallback — send to Gemini as inline data
+    // For PDF: Gemini 2.0 Flash natively supports application/pdf
+    // Force correct MIME type based on extension
+    let mimeType = 'application/pdf';
+    if (ext === 'docx' || ext === 'doc') mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+    // Gemini inline data limit is ~4MB — if larger, truncate (use first 3MB)
+    const maxBytes = 3 * 1024 * 1024;
+    const dataBuffer = buffer.length > maxBytes ? buffer.subarray(0, maxBytes) : buffer;
+    const base64 = dataBuffer.toString('base64');
+
     const result = await gemini('Document text extractor.').generateContent([
       { inlineData: { mimeType, data: base64 } },
-      { text: 'Extract all text from this document. Return plain text only, no markdown, no commentary.' },
+      { text: 'Extract all readable text from this document. Return plain text only — no markdown formatting, no commentary, no headers. Just the raw text content.' },
     ]);
-    res.json({ text: result.response.text().slice(0, 20000) });
+    const extracted = result.response.text().trim();
+    console.log(`[extract-text] Gemini extracted ${extracted.length} chars`);
+    res.json({ text: extracted.slice(0, 20000) });
   } catch (err: any) {
     console.error('/api/extract-text error:', err);
     res.status(500).json({ error: 'Text extraction failed.', detail: String(err?.message || err) });
@@ -406,21 +449,62 @@ function buildInviteEmailHtml(studentName: string, assignmentTitle: string, invi
 </html>`;
 }
 
+// SMTP account configs — each account has its own env var prefix
+const SMTP_ACCOUNTS: Record<string, { host: string; port: number; user: string; pass: string; from: string; label: string }> = {
+  gmail: {
+    host: process.env.SMTP_GMAIL_HOST || process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.SMTP_GMAIL_PORT || process.env.SMTP_PORT || '587'),
+    user: process.env.SMTP_GMAIL_USER || process.env.SMTP_USER || '',
+    pass: process.env.SMTP_GMAIL_PASS || process.env.SMTP_PASS || '',
+    from: process.env.SMTP_GMAIL_FROM || process.env.SMTP_FROM || 'ashraf.badawi@gmail.com',
+    label: 'Gmail (ashraf.badawi@gmail.com)',
+  },
+  zc: {
+    host: process.env.SMTP_ZC_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.SMTP_ZC_PORT || '587'),
+    user: process.env.SMTP_ZC_USER || '',
+    pass: process.env.SMTP_ZC_PASS || '',
+    from: process.env.SMTP_ZC_FROM || 'abadawi@zewailcity.edu.eg',
+    label: 'Zewail City (abadawi@zewailcity.edu.eg)',
+  },
+  upm: {
+    host: process.env.SMTP_UPM_HOST || 'smtp.office365.com',
+    port: parseInt(process.env.SMTP_UPM_PORT || '587'),
+    user: process.env.SMTP_UPM_USER || '',
+    pass: process.env.SMTP_UPM_PASS || '',
+    from: process.env.SMTP_UPM_FROM || 'a.badawi@upm.edu.sa',
+    label: 'UPM (a.badawi@upm.edu.sa)',
+  },
+};
+
+app.get('/api/smtp-accounts', (_req, res) => {
+  // Return which accounts are configured (have credentials set)
+  const configured = Object.entries(SMTP_ACCOUNTS).map(([key, cfg]) => ({
+    key,
+    label: cfg.label,
+    from: cfg.from,
+    ready: !!(cfg.user && cfg.pass),
+  }));
+  res.json({ accounts: configured });
+});
+
 app.post('/api/send-invites', async (req, res) => {
   try {
-    const { invites, assignmentTitle, subject, body } = req.body as {
+    const { invites, assignmentTitle, subject, body, fromAccount = 'gmail' } = req.body as {
       invites: { studentId: string; email: string; name: string; inviteUrl: string }[];
       assignmentTitle: string;
       subject: string;
       body: string;
+      fromAccount?: 'gmail' | 'zc' | 'upm';
     };
     if (!invites?.length) { res.status(400).json({ error: 'invites array required' }); return; }
 
-    const smtpHost = process.env.SMTP_HOST;
-    const smtpUser = process.env.SMTP_USER;
-    const smtpPass = process.env.SMTP_PASS;
-    const smtpFrom = process.env.SMTP_FROM || smtpUser;
-    const smtpPort = parseInt(process.env.SMTP_PORT || '587');
+    const acct = SMTP_ACCOUNTS[fromAccount] || SMTP_ACCOUNTS.gmail;
+    const smtpHost = acct.host;
+    const smtpUser = acct.user;
+    const smtpPass = acct.pass;
+    const smtpFrom = acct.from;
+    const smtpPort = acct.port;
 
     if (!smtpHost || !smtpUser || !smtpPass) {
       res.status(503).json({ error: 'Email not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM in environment.' });

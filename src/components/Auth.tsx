@@ -61,9 +61,12 @@ export default function Auth({ onDevLogin }: Props) {
           </button>
         )}
 
-        <div className="mt-8 pt-8 border-t border-stone-100 text-center">
+        <div className="mt-8 pt-8 border-t border-stone-100 text-center space-y-1">
           <p className="text-xs text-stone-400 uppercase tracking-widest font-medium">
             Educator & Admin Access Only
+          </p>
+          <p className="text-[10px] text-stone-300">
+            Last updated Mar 21, 2026 · 8:31 AM EDT
           </p>
         </div>
       </motion.div>
