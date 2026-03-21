@@ -50,6 +50,7 @@ export interface Assignment {
   captureMode: 'Snapshot' | 'Video';
   status: 'Draft' | 'Processing' | 'Ready' | 'Active' | 'Closed' | 'Archived';
   summaryText?: string;
+  rubricText?: string;     // effective rubric (provided or AI-generated) — stored for re-use at analysis time
   summaryGeneratedAt?: string;
 }
 
@@ -153,6 +154,7 @@ export interface ResponseChunk {
 export interface Snapshot {
   id: string;
   timestamp: string;
+  storagePath?: string;  // Firebase Storage path, stored at upload time for reliable retrieval
   questionIndex: number;
   isSubmissionSnapshot: boolean;
   imageUrl?: string;

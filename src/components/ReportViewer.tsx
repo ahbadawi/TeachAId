@@ -90,7 +90,10 @@ export default function ReportViewer({ sessionId, onClose, onPrevStudent, onNext
     if (!chunks[currentChunkIndex]) return;
     const fetchAudio = async () => {
       try {
-        const url = await getDownloadURL(ref(storage, `sessions/${sessionId}/q${chunks[currentChunkIndex].questionIndex}.webm`));
+        const chunk = chunks[currentChunkIndex];
+        // Branch recordings use _branch suffix; main recordings do not
+        const filename = `q${chunk.questionIndex}${chunk.isBranch ? '_branch' : ''}.webm`;
+        const url = await getDownloadURL(ref(storage, `sessions/${sessionId}/${filename}`));
         setAudioUrl(url);
       } catch { setAudioUrl(null); }
     };
@@ -110,6 +113,9 @@ export default function ReportViewer({ sessionId, onClose, onPrevStudent, onNext
         note: decisionNote.trim() || null,
         decidedAt: serverTimestamp(),
       });
+      // Mark the session as REVIEWED so it leaves the AWAITING_REVIEW queue
+      await updateDoc(doc(db, 'interviewSessions', sessionId), { status: 'REVIEWED' });
+      setSession(prev => prev ? { ...prev, status: 'REVIEWED' } : prev);
       setExistingDecision({
         id: decisionDoc.id,
         sessionId,
@@ -145,10 +151,23 @@ export default function ReportViewer({ sessionId, onClose, onPrevStudent, onNext
       const qDocs = await getDocs(query(collection(db, 'assignments', assignment.id, 'questions'), orderBy('order')));
       const questions = qDocs.docs.map((d, i) => ({ index: i, textEn: (d.data().textEn as string) || '' }));
 
+      // Use stored rubric text if available; fall back to empty string (server will
+      // regenerate a rubric from the brief if needed via ensureRubric())
+      const rubricText = assignment.rubricText || '';
+
+      // Retrieve student submission text from the session's submission chunk (if any)
+      let submissionText = '';
+      const submissionChunkSnap = await getDocs(
+        query(collection(db, 'interviewSessions', sessionId, 'responseChunks'), where('isSubmission', '==', true))
+      );
+      if (!submissionChunkSnap.empty) {
+        submissionText = (submissionChunkSnap.docs[0].data().transcriptText as string) || '';
+      }
+
       const res = await fetch('/api/transcribe-and-analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ questions, audioUrls, submissionText: '', rubricText: '' }),
+        body: JSON.stringify({ questions, audioUrls, submissionText, rubricText }),
       });
       if (!res.ok) throw new Error(`Server error ${res.status}`);
       const { transcripts, analysis } = await res.json() as {
@@ -424,8 +443,12 @@ function SnapshotThumbnail({ snapshot, sessionId }: { snapshot: Snapshot; sessio
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
-    getDownloadURL(ref(storage, `sessions/${sessionId}/snap_${new Date(snapshot.timestamp).getTime()}.jpg`))
-      .then(setUrl).catch(() => {});
+    // Prefer the explicit storagePath stored at upload time (new snapshots).
+    // Fall back to timestamp reconstruction for legacy snapshots that pre-date this field.
+    const path = snapshot.storagePath
+      ? snapshot.storagePath
+      : `sessions/${sessionId}/snap_${new Date(snapshot.timestamp).getTime()}.jpg`;
+    getDownloadURL(ref(storage, path)).then(setUrl).catch(() => {});
   }, [snapshot, sessionId]);
 
   return (

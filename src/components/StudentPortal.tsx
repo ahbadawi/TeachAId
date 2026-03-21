@@ -549,9 +549,13 @@ export default function StudentPortal({ token }: Props) {
     ctx.drawImage(videoRef.current, 0, 0, 640, 480);
     canvasRef.current.toBlob(async blob => {
       if (!blob) return;
-      const snapshotRef = ref(storage, `sessions/${sessionId}/snap_${Date.now()}.jpg`);
+      // Use the same timestamp for both the filename and the Firestore record so
+      // ReportViewer can reliably reconstruct the Storage path from storagePath.
+      const storagePath = `sessions/${sessionId}/snap_${Date.now()}.jpg`;
+      const snapshotRef = ref(storage, storagePath);
       await uploadBytes(snapshotRef, blob).catch(() => {});
       await addDoc(collection(db, 'interviewSessions', sessionId, 'snapshots'), {
+        storagePath,            // stored path — avoids serverTimestamp vs Date.now() mismatch
         questionIndex: qIndex,
         isSubmissionSnapshot: isSubmission,
         timestamp: serverTimestamp(),

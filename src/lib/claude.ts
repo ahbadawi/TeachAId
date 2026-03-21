@@ -202,7 +202,9 @@ export interface InvitePayload {
 export async function getSmtpAccounts(): Promise<{ key: string; label: string; from: string }[]> {
   const res = await fetch(`${API_BASE}/smtp-accounts`);
   if (!res.ok) return [];
-  return res.json();
+  // Server returns { accounts: [...] } — unwrap to the array
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data.accounts ?? []);
 }
 
 export async function sendInvites(

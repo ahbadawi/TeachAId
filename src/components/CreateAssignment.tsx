@@ -89,7 +89,7 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
             rubricUrl ? extractTextFromUrl(rubricUrl) : Promise.resolve(''),
           ]);
 
-          const { summaryText, questions: generatedQuestions } =
+          const { summaryText, questions: generatedQuestions, rubricText: effectiveRubric } =
             await generateAssignmentSummary(briefText, rubricText, questionCount);
 
           // Save questions to subcollection
@@ -104,20 +104,28 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
             });
           }
 
-          // Persist summary and mark ready
+          // Persist summary, effective rubric text, and mark ready.
+          // rubricText is stored so processSession can cross-reference answers against it
+          // without needing to re-download and re-parse the rubric file.
           await updateDoc(doc(db, 'assignments', assignmentRef.id), {
             status: 'Active',
             summaryText,
+            rubricText: effectiveRubric,
             summaryGeneratedAt: serverTimestamp(),
           });
         } catch (genErr: any) {
           console.error('Summary/question generation failed:', genErr);
           // Mark active even without questions so the assignment is usable
           await updateDoc(doc(db, 'assignments', assignmentRef.id), { status: 'Active' });
-          // Surface the real error so the educator knows to regenerate from AssignmentDetail
+          // Surface a meaningful error — "Failed to fetch" means the Express API server is not running
+          const rawMsg: string = genErr?.message || 'unknown error';
+          const apiDown = rawMsg.toLowerCase().includes('fetch') || rawMsg.toLowerCase().includes('network');
           setErrorMessage(
-            `Assignment created, but AI question generation failed: ${genErr?.message || 'unknown error'}. ` +
-            'Open the assignment and click "Generate" to retry.'
+            apiDown
+              ? 'Assignment created, but the API server is not running. ' +
+                'Run "npm start" (starts both Vite and the Express server together), then open the assignment to generate questions.'
+              : `Assignment created, but AI question generation failed: ${rawMsg}. ` +
+                'Open the assignment and click "Generate" to retry.'
           );
           setProcessingStep('error');
           return;
