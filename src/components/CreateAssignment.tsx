@@ -130,7 +130,7 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
                 'Run "npm start" (starts both Vite and the Express server together), then open the assignment to generate questions.'
               : quotaExceeded
               ? 'Assignment created, but the AI question generation hit a quota limit (Gemini 429). ' +
-                'Wait a minute and then open the assignment to retry, or check your Google AI Studio quota at ai.google.dev.'
+                'Wait a minute and then open the assignment to retry, or check your quota at aistudio.google.com.'
               : `Assignment created, but AI question generation failed: ${rawMsg}. ` +
                 'Open the assignment and click "Generate" to retry.'
           );
