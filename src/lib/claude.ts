@@ -1,5 +1,5 @@
 // Client-side helpers that proxy all AI work through the Express server.
-// The Anthropic API key NEVER leaves the server — this file contains no secrets.
+// The Google Gemini API key NEVER leaves the server — this file contains no secrets.
 
 const API_BASE = '/api';
 

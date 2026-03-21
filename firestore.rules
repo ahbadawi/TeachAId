@@ -51,7 +51,11 @@ service cloud.firestore {
     match /inviteTokens/{tokenId} {
       allow read: if true;
       allow create: if isEducator();
-      allow update: if true;
+      // Students may only stamp usedAt on a token that hasn't been consumed yet;
+      // no other field may be changed.
+      allow update: if
+        (!('usedAt' in resource.data) || resource.data.usedAt == null) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedAt']);
     }
 
     match /consentRecords/{recordId} {

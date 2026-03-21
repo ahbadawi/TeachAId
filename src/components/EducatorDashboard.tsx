@@ -44,6 +44,7 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
   const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
   const [loading, setLoading] = useState(!isDev);
+  const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
   const [searchQuery, setSearchQuery] = useState('');
 
   // Per-course student counts
@@ -70,6 +71,7 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
     const qAssignments = query(collection(db, 'assignments'), where('educatorId', '==', educator.id));
     const unsubAssignments = onSnapshot(qAssignments, (snapshot) => {
       setAssignments(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Assignment)));
+      setLastRefreshed(new Date());
       setLoading(false);
     });
 
@@ -200,7 +202,7 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
                   <div className="flex items-baseline gap-3">
                     <h1 className="text-2xl font-serif font-medium text-emerald-700">TeachAId</h1>
                     <span className="text-xs text-stone-400">
-                      Last updated {new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}
+                      Last updated {lastRefreshed.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}
                     </span>
                   </div>
                   <section>
