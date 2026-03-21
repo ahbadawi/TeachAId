@@ -66,7 +66,7 @@ export default function Auth({ onDevLogin }: Props) {
             Educator & Admin Access Only
           </p>
           <p className="text-[10px] text-stone-300">
-            Last updated Mar 21, 2026 · 8:31 AM EDT
+            {new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}
           </p>
         </div>
       </motion.div>

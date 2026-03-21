@@ -199,7 +199,9 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
                 <div className="space-y-8">
                   <div className="flex items-baseline gap-3">
                     <h1 className="text-2xl font-serif font-medium text-emerald-700">TeachAId</h1>
-                    <span className="text-xs text-stone-400">Last updated Mar 21, 2026 · 9:15 AM EDT</span>
+                    <span className="text-xs text-stone-400">
+                      Last updated {new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}
+                    </span>
                   </div>
                   <section>
                     <h2 className="text-lg font-medium text-stone-900 mb-4">Active Assignments</h2>
