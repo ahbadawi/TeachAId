@@ -227,10 +227,10 @@ app.post('/api/generate-questions', async (req, res) => {
   }
 });
 
-// ─── Transcribe + Analyze (Faster Whisper → Claude) ──────────────────────────
-// Downloads audio from Firebase Storage URLs, transcribes with local Faster Whisper
-// (large-v3, no API key, handles EN+AR mixed speech + heavy accents),
-// then analyses comprehension with Claude. Sequential — large-v3 needs full CPU memory.
+// ─── Transcribe + Analyze (Gemini audio → Gemini analysis) ───────────────────
+// Downloads audio from Firebase Storage URLs, transcribes each response with
+// Gemini 2.0 Flash inline audio input (handles EN+AR mixed speech),
+// then analyses comprehension with a second Gemini call.
 app.post('/api/transcribe-and-analyze', async (req, res) => {
   try {
     const { questions, audioUrls, submissionText, rubricText } = req.body as {
@@ -240,28 +240,35 @@ app.post('/api/transcribe-and-analyze', async (req, res) => {
     };
 
     const transcripts: { questionIndex: number; questionText: string; responseText: string }[] = [];
+    const MAX_AUDIO_BYTES = 3 * 1024 * 1024; // 3MB Gemini inline data safety limit
 
     for (const { questionIndex, url } of audioUrls) {
       try {
         const audioRes = await fetch(url, { signal: AbortSignal.timeout(60_000) });
         if (!audioRes.ok) { console.warn(`Audio download failed q${questionIndex}: ${audioRes.status}`); continue; }
 
-        const form = new FormData();
-        form.append('audio', new Blob([await audioRes.arrayBuffer()], { type: 'audio/webm' }), `q${questionIndex}.webm`);
-        // Vocabulary primer: biases Whisper toward domain terms in the submission
-        const hint = submissionText?.slice(0, 200).replace(/\n/g, ' ').trim();
-        if (hint) form.append('prompt', hint);
-        // No language field — auto-detect per segment for EN/AR code-switching
-
-        const whisperRes = await fetch(WHISPER_URL, { method: 'POST', body: form, signal: AbortSignal.timeout(300_000) });
-        if (!whisperRes.ok) { console.warn(`Whisper ${whisperRes.status} for q${questionIndex}`); continue; }
-
-        const { transcript, language, confidence } = await whisperRes.json() as { transcript: string; language: string; confidence: number };
-        console.log(`[STT] q${questionIndex}: ${language} (${Math.round((confidence ?? 0) * 100)}%) — "${transcript.slice(0, 80)}"`);
+        let audioBuffer = Buffer.from(await audioRes.arrayBuffer());
+        if (audioBuffer.length > MAX_AUDIO_BYTES) audioBuffer = audioBuffer.slice(0, MAX_AUDIO_BYTES);
+        const audioBase64 = audioBuffer.toString('base64');
 
         const questionText = questions.find(q => q.index === questionIndex)?.textEn ?? '';
-        if (transcript.trim()) transcripts.push({ questionIndex, questionText, responseText: transcript.trim() });
-      } catch (e) { console.error(`Whisper failed q${questionIndex}:`, e); }
+        const transcribePrompt =
+          `Transcribe the student's spoken response to this interview question.\n` +
+          `Question: "${questionText}"\n\n` +
+          `Transcribe exactly what the student said. Preserve the original language (English, Arabic, or mixed). ` +
+          `If the audio is silent or inaudible, return exactly: [No response]`;
+
+        const transcribeResult = await gemini().generateContent([
+          transcribePrompt,
+          { inlineData: { mimeType: 'audio/webm', data: audioBase64 } },
+        ]);
+        const transcript = transcribeResult.response.text().trim();
+        console.log(`[STT] q${questionIndex}: "${transcript.slice(0, 80)}"`);
+
+        if (transcript && transcript !== '[No response]') {
+          transcripts.push({ questionIndex, questionText, responseText: transcript });
+        }
+      } catch (e) { console.error(`Gemini STT failed q${questionIndex}:`, e); }
     }
 
     const transcriptText = questions.map(q => {

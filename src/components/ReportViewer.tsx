@@ -197,7 +197,7 @@ export default function ReportViewer({ sessionId, onClose, onPrevStudent, onNext
       setChunks(updatedChunksSnap.docs.map(d => ({ id: d.id, ...d.data() } as ResponseChunk)).sort((a, b) => a.questionIndex - b.questionIndex));
     } catch (err: any) {
       console.error('processSession error:', err);
-      setProcessError(err?.message || 'Processing failed. Make sure the Whisper server is running.');
+      setProcessError(err?.message || 'Processing failed. Please try again.');
     } finally {
       setProcessing(false);
     }
@@ -239,8 +239,7 @@ export default function ReportViewer({ sessionId, onClose, onPrevStudent, onNext
           <div className="flex-1">
             <p className="text-sm font-semibold text-amber-800">Session ready for processing</p>
             <p className="text-xs text-amber-600 mt-0.5">
-              Audio responses are stored. Click Process to run Whisper STT transcription + Claude analysis.
-              The Whisper server must be running locally.
+              Audio responses are stored. Click Process to run AI transcription and comprehension analysis.
             </p>
             {processError && <p className="text-xs text-red-600 mt-1">{processError}</p>}
           </div>
