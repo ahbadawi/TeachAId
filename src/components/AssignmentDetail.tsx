@@ -39,6 +39,7 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
   // AI summary
   const [summary, setSummary] = useState(assignment.summaryText || '');
   const [generatingSummary, setGeneratingSummary] = useState(false);
+  const [summaryStep, setSummaryStep] = useState('');
   const [summaryError, setSummaryError] = useState('');
 
   // Questions subcollection
@@ -124,11 +125,14 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
     }
     setGeneratingSummary(true);
     setSummaryError('');
+    setSummaryStep('Downloading and reading files…');
     try {
       const [briefText, rubricText] = await Promise.all([
         extractTextFromUrl(liveAssignment.briefFileUrl),
         liveAssignment.rubricFileUrl ? extractTextFromUrl(liveAssignment.rubricFileUrl) : Promise.resolve(''),
       ]);
+      if (!briefText.trim()) throw new Error('Could not extract text from the brief file. Ensure it is a readable PDF, DOCX, or TXT.');
+      setSummaryStep(`Generating summary and ${liveAssignment.questionCount} questions with AI…`);
       const { summaryText, questions: newQs } = await generateAssignmentSummary(briefText, rubricText, liveAssignment.questionCount);
 
       // Save summary to Firestore
@@ -149,6 +153,7 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
       setSummaryError(err?.message || 'Failed to generate summary.');
     } finally {
       setGeneratingSummary(false);
+      setSummaryStep('');
     }
   };
 
@@ -277,11 +282,15 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
             {summary ? 'Regenerate' : 'Generate'}
           </button>
         </div>
-        {summaryError && <p className="text-xs text-red-500 mb-2">{summaryError}</p>}
+        {summaryError && (
+          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2 mb-3">
+            {summaryError}
+          </div>
+        )}
         {generatingSummary ? (
           <div className="flex items-center gap-2 text-sm text-stone-400 py-4">
             <Loader2 className="w-4 h-4 animate-spin" />
-            Analyzing brief and generating summary + {liveAssignment.questionCount} generic questions…
+            {summaryStep || 'Working…'}
           </div>
         ) : summary ? (
           <p className="text-sm text-stone-700 leading-relaxed">{summary}</p>

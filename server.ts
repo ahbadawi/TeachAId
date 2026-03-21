@@ -310,29 +310,44 @@ function getExtFromUrl(url: string): string {
   } catch { return ''; }
 }
 
-// ─── Extract text from a Firebase Storage URL ────────────────────────────────
+// ─── Extract text from file bytes (base64) or URL ─────────────────────────────
+// Primary path: client sends base64 bytes directly (avoids server-side Firebase fetch).
+// Fallback: client sends URL and server downloads it (legacy path, kept for compatibility).
 app.post('/api/extract-text', async (req, res) => {
   try {
-    const { url } = req.body as { url: string };
-    if (!url) { res.status(400).json({ error: 'url required' }); return; }
+    const { url, data: base64Data, mimeType: clientMimeType } = req.body as {
+      url?: string; data?: string; mimeType?: string;
+    };
 
-    const fileRes = await fetch(url, { signal: AbortSignal.timeout(60_000) });
-    if (!fileRes.ok) { res.status(502).json({ error: `Failed to fetch file: ${fileRes.status}` }); return; }
+    let buffer: Buffer;
+    let mimeType = clientMimeType || 'application/pdf';
 
-    const buffer = Buffer.from(await fileRes.arrayBuffer());
-    const ext = getExtFromUrl(url);
-    const contentType = fileRes.headers.get('content-type') || '';
+    if (base64Data) {
+      // Primary path: client already downloaded the file and sent base64
+      buffer = Buffer.from(base64Data, 'base64');
+      console.log(`[extract-text] base64 input mimeType="${mimeType}" size=${buffer.length}`);
+    } else if (url) {
+      // Fallback: server downloads from URL
+      const fileRes = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+      if (!fileRes.ok) { res.status(502).json({ error: `Failed to fetch file: ${fileRes.status}` }); return; }
+      buffer = Buffer.from(await fileRes.arrayBuffer());
+      const ext = getExtFromUrl(url);
+      mimeType = ext === 'docx' || ext === 'doc'
+        ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        : ext === 'txt' || ext === 'md' ? 'text/plain' : 'application/pdf';
+      console.log(`[extract-text] url fallback ext="${ext}" mimeType="${mimeType}" size=${buffer.length}`);
+    } else {
+      res.status(400).json({ error: 'data or url required' }); return;
+    }
 
-    console.log(`[extract-text] url ext="${ext}" content-type="${contentType}" size=${buffer.length}`);
-
-    // Plain text
-    if (ext === 'txt' || ext === 'md' || contentType.includes('text/plain')) {
+    // Plain text — decode directly, no Gemini needed
+    if (mimeType === 'text/plain' || mimeType.includes('text/plain')) {
       res.json({ text: buffer.toString('utf-8').slice(0, 20000) });
       return;
     }
 
-    // DOCX — try mammoth if available, otherwise fall through to Gemini
-    if (ext === 'docx' || ext === 'doc') {
+    // DOCX — try mammoth first (fast, accurate, no token cost)
+    if (mimeType.includes('wordprocessingml') || mimeType.includes('msword')) {
       try {
         const mammoth = await import('mammoth');
         const result = await mammoth.extractRawText({ buffer });
@@ -340,24 +355,18 @@ app.post('/api/extract-text', async (req, res) => {
         res.json({ text: result.value.slice(0, 20000) });
         return;
       } catch (mammothErr) {
-        console.warn('[extract-text] mammoth unavailable, falling back to Gemini:', (mammothErr as any)?.message);
+        console.warn('[extract-text] mammoth failed, falling back to Gemini:', (mammothErr as any)?.message);
         // Fall through to Gemini
       }
     }
 
-    // PDF or DOCX fallback — send to Gemini as inline data
-    // For PDF: Gemini 2.0 Flash natively supports application/pdf
-    // Force correct MIME type based on extension
-    let mimeType = 'application/pdf';
-    if (ext === 'docx' || ext === 'doc') mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-
-    // Gemini inline data limit is ~4MB — if larger, truncate (use first 3MB)
-    const maxBytes = 3 * 1024 * 1024;
+    // PDF (or DOCX fallback) — send to Gemini as inline data
+    const maxBytes = 3 * 1024 * 1024; // 3MB safety limit
     const dataBuffer = buffer.length > maxBytes ? buffer.subarray(0, maxBytes) : buffer;
     const base64 = dataBuffer.toString('base64');
 
     const result = await gemini('Document text extractor.').generateContent([
-      { inlineData: { mimeType, data: base64 } },
+      { inlineData: { mimeType: mimeType === 'application/pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', data: base64 } },
       { text: 'Extract all readable text from this document. Return plain text only — no markdown formatting, no commentary, no headers. Just the raw text content.' },
     ]);
     const extracted = result.response.text().trim();

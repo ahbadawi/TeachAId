@@ -180,6 +180,10 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
               {/* ── OVERVIEW ── */}
               {activeTab === 'overview' && (
                 <div className="space-y-8">
+                  <div className="flex items-baseline gap-3">
+                    <h1 className="text-2xl font-serif font-medium text-emerald-700">TeachAId</h1>
+                    <span className="text-xs text-stone-400">Last updated Mar 21, 2026 · 9:15 AM EDT</span>
+                  </div>
                   <section>
                     <h2 className="text-lg font-medium text-stone-900 mb-4">Active Assignments</h2>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
