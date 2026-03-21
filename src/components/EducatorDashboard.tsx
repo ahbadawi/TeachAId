@@ -44,9 +44,13 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
   const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
   const [loading, setLoading] = useState(!isDev);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Per-course student counts
   const [courseStudentCounts, setCourseStudentCounts] = useState<Record<string, number>>({});
+
+  // Notification count — sessions waiting for the educator's review
+  const awaitingReviewCount = sessions.filter(s => s.status === 'AWAITING_REVIEW').length;
 
   useEffect(() => {
     if (isDev) return;
@@ -153,13 +157,26 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
         <header className="h-16 bg-white border-b border-stone-200 flex items-center justify-between px-8">
           <div className="relative w-96">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
-            <input type="text" placeholder="Search students or assignments..."
-              className="w-full pl-10 pr-4 py-2 bg-stone-100 border-none rounded-xl text-sm focus:ring-2 focus:ring-emerald-500/20" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search students or assignments..."
+              className="w-full pl-10 pr-4 py-2 bg-stone-100 border-none rounded-xl text-sm focus:ring-2 focus:ring-emerald-500/20"
+            />
           </div>
           <div className="flex items-center gap-4">
-            <button className="p-2 text-stone-400 hover:text-stone-600 relative">
+            <button
+              onClick={() => { setActiveTab('assignments'); setSelectedAssignment(null); }}
+              title={awaitingReviewCount > 0 ? `${awaitingReviewCount} session${awaitingReviewCount > 1 ? 's' : ''} awaiting review` : 'No pending reviews'}
+              className="p-2 text-stone-400 hover:text-stone-600 relative"
+            >
               <Bell className="w-5 h-5" />
-              <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
+              {awaitingReviewCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 border-2 border-white">
+                  {awaitingReviewCount > 9 ? '9+' : awaitingReviewCount}
+                </span>
+              )}
             </button>
             <button onClick={() => setShowCreateAssignment(true)}
               className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-emerald-700 transition-colors flex items-center gap-2">
@@ -251,22 +268,33 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
                         New Assignment
                       </button>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {assignments.length === 0 ? (
-                        <div className="col-span-full py-12 text-center bg-white rounded-3xl border border-dashed border-stone-200">
-                          <p className="text-stone-400">No assignments yet.</p>
+                    {(() => {
+                      const q = searchQuery.trim().toLowerCase();
+                      const filtered = q
+                        ? assignments.filter(a =>
+                            a.title.toLowerCase().includes(q) ||
+                            (courses.find(c => c.id === a.courseId)?.name || '').toLowerCase().includes(q)
+                          )
+                        : assignments;
+                      return (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                          {filtered.length === 0 ? (
+                            <div className="col-span-full py-12 text-center bg-white rounded-3xl border border-dashed border-stone-200">
+                              <p className="text-stone-400">{q ? `No assignments match "${searchQuery}".` : 'No assignments yet.'}</p>
+                            </div>
+                          ) : filtered.map(a => (
+                            <div key={a.id} onClick={() => setSelectedAssignment(a)}>
+                              <AssignmentCard
+                                assignment={a}
+                                stats={sessionStats[a.id] || { total: 0, completed: 0, submitted: 0, interviewed: 0, graded: 0, flagged: 0 }}
+                                courseName={courses.find(c => c.id === a.courseId)?.name}
+                                studentCount={courseStudentCounts[a.courseId]}
+                              />
+                            </div>
+                          ))}
                         </div>
-                      ) : assignments.map(a => (
-                        <div key={a.id} onClick={() => setSelectedAssignment(a)}>
-                          <AssignmentCard
-                            assignment={a}
-                            stats={sessionStats[a.id] || { total: 0, completed: 0, submitted: 0, interviewed: 0, graded: 0, flagged: 0 }}
-                            courseName={courses.find(c => c.id === a.courseId)?.name}
-                            studentCount={courseStudentCounts[a.courseId]}
-                          />
-                        </div>
-                      ))}
-                    </div>
+                      );
+                    })()}
                   </div>
                 )
               )}

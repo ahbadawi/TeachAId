@@ -1,14 +1,31 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+
+    // Assignment files (briefs, rubrics) — authenticated write only
+    match /assignments/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Student submission uploads — unauthenticated students upload here via token URL.
+    // Restrict to document/image types and 50 MB max to prevent arbitrary file abuse.
     match /submissions/{assignmentId}/{fileName} {
       allow read: if request.auth != null;
-      allow write: if true;
+      allow write: if request.resource.size <= 50 * 1024 * 1024
+        && request.resource.contentType.matches(
+          'application/(pdf|vnd\\.openxmlformats-officedocument\\.wordprocessingml\\.document|msword|zip)|text/.*|image/.*'
+        );
     }
+
+    // Session audio/video/snapshots — restrict to audio, video, and image content types; 150 MB max.
     match /sessions/{sessionId}/{fileName} {
       allow read: if request.auth != null;
-      allow write: if true;
+      allow write: if request.resource.size <= 150 * 1024 * 1024
+        && request.resource.contentType.matches('audio/.*|video/.*|image/.*');
     }
+
+    // Everything else requires Firebase Auth
     match /{allPaths=**} {
       allow read: if request.auth != null;
       allow write: if request.auth != null;

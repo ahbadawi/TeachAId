@@ -177,6 +177,11 @@ app.post('/api/analyze-submission', async (req, res) => {
 
     const questionsWithImages = await Promise.all(parsed.questions.map(async (q, i) => {
       try {
+        // Explicit bounds check — Gemini can hallucinate a pageIndex beyond the array length,
+        // which would make pagesToAnalyze[q.pageIndex] undefined and potentially throw downstream.
+        if (typeof q.pageIndex !== 'number' || q.pageIndex < 0 || q.pageIndex >= pagesToAnalyze.length) {
+          return { ...q, id: `q-${i}` };
+        }
         const b64 = pagesToAnalyze[q.pageIndex];
         if (!b64 || !q.region) return { ...q, id: `q-${i}` };
         const buf = Buffer.from(b64, 'base64');

@@ -79,11 +79,14 @@ service cloud.firestore {
 
     match /analysisReports/{reportId} {
       allow read: if isAuthenticated();
-      allow create: if true;
-      allow update: if true;
+      // Only the educator's browser (after receiving AI analysis from the server)
+      // creates and updates analysis reports. Unauthenticated/student access is blocked
+      // to prevent fake reports being injected by a student.
+      allow create: if isEducator();
+      allow update: if isEducator();
       match /flags/{flagId} {
         allow read: if isAuthenticated();
-        allow create: if true;
+        allow create: if isEducator();
       }
     }
 

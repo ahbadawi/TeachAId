@@ -6,7 +6,7 @@ import {
 import { Assignment, Student, InterviewSession } from '../types';
 import {
   UserPlus, Mail, Link as LinkIcon, CheckCircle2, Clock,
-  AlertCircle, FileText, Loader2, X, Upload, Send, CheckSquare, Square,
+  AlertCircle, FileText, Loader2, X, Upload, Send, CheckSquare, Square, Download,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import ReportViewer from './ReportViewer';
@@ -143,6 +143,33 @@ export default function StudentList({ assignment, onClose }: Props) {
   const allChecked = students.length > 0 && checkedIds.size === students.length;
   const someChecked = checkedIds.size > 0 && checkedIds.size < students.length;
 
+  const exportCsv = () => {
+    const rows = [
+      ['Student ID', 'Name', 'Email', 'Session Status', 'Started At', 'Completed At'],
+      ...students.map(s => {
+        const sess = sessions.find(se => se.studentId === s.id);
+        return [
+          s.studentId || '',
+          s.name,
+          s.email || '',
+          sess?.status || 'NOT_STARTED',
+          sess?.startedAt ? new Date(sess.startedAt as any).toISOString() : '',
+          sess?.completedAt ? new Date(sess.completedAt as any).toISOString() : '',
+        ];
+      }),
+    ];
+    const csv = rows
+      .map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${assignment.title.replace(/[^a-z0-9]/gi, '_')}_students.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -177,6 +204,14 @@ export default function StudentList({ assignment, onClose }: Props) {
             <UserPlus className="w-4 h-4" />
             Add Student
           </button>
+          {students.length > 0 && (
+            <button onClick={exportCsv}
+              title="Download student roster with session status as CSV"
+              className="flex items-center gap-2 text-sm font-medium text-stone-500 hover:text-stone-700 border border-stone-200 px-3 py-2 rounded-xl hover:bg-stone-50">
+              <Download className="w-4 h-4" />
+              Export CSV
+            </button>
+          )}
         </div>
       </div>
 

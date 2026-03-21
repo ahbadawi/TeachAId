@@ -59,21 +59,47 @@ export async function analyzeSession(
   return res.json() as Promise<SessionAnalysis>;
 }
 
-// ─── Web Speech TTS (no API key required) ────────────────────────────────────
+// ─── TTS — server first, browser SpeechSynthesis fallback ────────────────────
+// Tries /api/tts (XTTS-V2 or Kokoro, high-quality) first.
+// Falls back to Web Speech API automatically when the server returns 503
+// (no TTS server configured) or is unreachable.
 
-export function speakText(text: string, lang: 'en' | 'ar' = 'en'): Promise<void> {
+function speakWithBrowser(text: string, lang: 'en' | 'ar'): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (!('speechSynthesis' in window)) {
-      resolve(); // silently skip if not supported
-      return;
-    }
+    if (!('speechSynthesis' in window)) { resolve(); return; }
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = lang === 'ar' ? 'ar-SA' : 'en-US';
     utterance.rate = 0.9;
     utterance.onend = () => resolve();
-    utterance.onerror = () => reject(new Error('TTS error'));
+    utterance.onerror = () => reject(new Error('Browser TTS error'));
     window.speechSynthesis.speak(utterance);
   });
+}
+
+export async function speakText(text: string, lang: 'en' | 'ar' = 'en'): Promise<void> {
+  // Try server TTS first — gets the high-quality XTTS-V2 or Kokoro voice when available
+  try {
+    const res = await fetch(`${API_BASE}/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, lang }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.ok) {
+      const audioBlob = await res.blob();
+      const url = URL.createObjectURL(audioBlob);
+      return new Promise((resolve, reject) => {
+        const audio = new Audio(url);
+        audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+        audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Audio playback error')); };
+        audio.play().catch(reject);
+      });
+    }
+    // 503 = no server TTS configured → fall through to browser
+  } catch {
+    // Server unreachable → fall through to browser
+  }
+  return speakWithBrowser(text, lang);
 }
 
 export function cancelSpeech(): void {

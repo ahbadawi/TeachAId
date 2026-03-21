@@ -93,10 +93,10 @@ export default function StudentPortal({ token }: Props) {
           return;
         }
 
-        // Mark token as used immediately — single-use enforcement
-        await updateDoc(doc(db, 'inviteTokens', tokenDoc.id), {
-          usedAt: serverTimestamp(),
-        });
+        // Store the token doc ID so we can mark it used when the interview actually starts.
+        // We do NOT mark usedAt here — if the student's machine crashes during the consent
+        // or mic check steps they would be locked out permanently. The token is burned
+        // atomically in startInterview() once the session record is created.
         setTokenDocId(tokenDoc.id);
 
         const [assignmentDoc, studentDoc] = await Promise.all([
@@ -282,6 +282,13 @@ export default function StudentPortal({ token }: Props) {
       return;
     }
     setUploadProgress('done');
+
+    // Burn the token now — the interview is actually starting.
+    // Doing this here (not on page load) allows students to fix technical issues
+    // during consent/mic-check without losing their link.
+    if (tokenDocId) {
+      await updateDoc(doc(db, 'inviteTokens', tokenDocId), { usedAt: serverTimestamp() });
+    }
 
     // Create session record
     const sessionRef = await addDoc(collection(db, 'interviewSessions'), {
