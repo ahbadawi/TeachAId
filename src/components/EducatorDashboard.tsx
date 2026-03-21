@@ -27,10 +27,10 @@ const DEV_ASSIGNMENTS: Assignment[] = [
   { id: 'dev-assign-3', title: 'Closed: Recursion Concepts', courseId: 'dev-course-2', educatorId: 'dev-educator-001', windowOpen: new Date(Date.now() - 864000000).toISOString(), windowClose: new Date(Date.now() - 86400000).toISOString(), questionCount: 8, questionMode: 'Mixed', responseTimeLimit: 60, captureMode: 'Snapshot', status: 'Closed' },
 ];
 const DEV_SESSIONS: InterviewSession[] = [
-  { id: 's1', assignmentId: 'dev-assign-1', studentId: 'stu-1', status: 'AWAITING_REVIEW', createdAt: new Date().toISOString() } as InterviewSession,
-  { id: 's2', assignmentId: 'dev-assign-1', studentId: 'stu-2', status: 'IN_PROGRESS', createdAt: new Date().toISOString() } as InterviewSession,
-  { id: 's3', assignmentId: 'dev-assign-1', studentId: 'stu-3', status: 'REVIEWED', createdAt: new Date().toISOString() } as InterviewSession,
-  { id: 's4', assignmentId: 'dev-assign-2', studentId: 'stu-4', status: 'AWAITING_PROCESSING', createdAt: new Date().toISOString() } as InterviewSession,
+  { id: 's1', assignmentId: 'dev-assign-1', studentId: 'stu-1', submissionId: '', currentQuestionIndex: 0, arabicAudioEnabled: false, status: 'AWAITING_REVIEW', startedAt: new Date().toISOString() },
+  { id: 's2', assignmentId: 'dev-assign-1', studentId: 'stu-2', submissionId: '', currentQuestionIndex: 2, arabicAudioEnabled: false, status: 'IN_PROGRESS',      startedAt: new Date().toISOString() },
+  { id: 's3', assignmentId: 'dev-assign-1', studentId: 'stu-3', submissionId: '', currentQuestionIndex: 0, arabicAudioEnabled: false, status: 'REVIEWED',          startedAt: new Date().toISOString() },
+  { id: 's4', assignmentId: 'dev-assign-2', studentId: 'stu-4', submissionId: '', currentQuestionIndex: 0, arabicAudioEnabled: false, status: 'AWAITING_PROCESSING', startedAt: new Date().toISOString() },
 ];
 
 export default function EducatorDashboard({ educator, onSignOut }: Props) {

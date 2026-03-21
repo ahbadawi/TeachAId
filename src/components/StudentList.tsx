@@ -387,10 +387,11 @@ function EmailPreviewModal({
         }))
       );
       const sendResults = await sendInvites(invites, assignment.title, subject, body, fromAccount);
-      const display = sendResults.map(r => {
-        const student = withEmail.find(s => s.id === r.studentId);
-        return { name: student?.name || r.studentId, status: r.status, error: r.error };
-      });
+      const display: { name: string; status: 'sent' | 'failed' | 'no-email'; error?: string }[] =
+        sendResults.map(r => {
+          const student = withEmail.find(s => s.id === r.studentId);
+          return { name: student?.name || r.studentId, status: r.status, error: r.error };
+        });
       // Add students without email as skipped
       withoutEmail.forEach(s => display.push({ name: s.name, status: 'no-email' }));
       setResults(display);
