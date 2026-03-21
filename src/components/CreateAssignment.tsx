@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { db, storage } from '../firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { Course } from '../types';
 import { X, Upload, Loader2, Info, CheckCircle2 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { generateQuestions } from '../lib/claude';
+import { extractTextFromUrl, generateAssignmentSummary } from '../lib/claude';
 import { logAudit } from '../lib/audit';
 import { cn } from '../lib/utils';
 
@@ -34,15 +34,6 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
   });
   const [processingStep, setProcessingStep] = useState<ProcessingStep>('idle');
   const [errorMessage, setErrorMessage] = useState('');
-
-  // Extract text from a plain text or PDF-like file (simple approach for Phase 1)
-  const extractText = async (file: File): Promise<string> => {
-    if (file.type === 'text/plain' || file.name.endsWith('.txt')) {
-      return file.text();
-    }
-    // For PDF/DOCX, return filename as placeholder — full extraction requires server-side
-    return `[File: ${file.name} — text extraction requires server-side processing]`;
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,15 +76,23 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
         createdAt: serverTimestamp(),
       });
 
-      // Generate questions (AI mode)
+      // Generate summary + questions by extracting real text from uploaded files
       if (questionMode === 'AI-Generated' || questionMode === 'Mixed') {
         setProcessingStep('generating');
         try {
+          // Extract text from the already-uploaded Firebase Storage files.
+          // extractTextFromUrl downloads the file in the browser (the token in the URL
+          // grants access) and sends bytes to the server for Gemini/mammoth processing.
+          // This replaces the old stub that returned "[File: x.pdf — placeholder]".
           const [briefText, rubricText] = await Promise.all([
-            extractText(briefFile),
-            extractText(rubricFile),
+            extractTextFromUrl(briefUrl),
+            rubricUrl ? extractTextFromUrl(rubricUrl) : Promise.resolve(''),
           ]);
-          const generatedQuestions = await generateQuestions(briefText, rubricText, '', questionCount);
+
+          const { summaryText, questions: generatedQuestions } =
+            await generateAssignmentSummary(briefText, rubricText, questionCount);
+
+          // Save questions to subcollection
           const questionsCol = collection(db, 'assignments', assignmentRef.id, 'questions');
           for (let i = 0; i < generatedQuestions.length; i++) {
             await addDoc(questionsCol, {
@@ -104,23 +103,29 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
               order: i,
             });
           }
-        } catch (genErr) {
-          console.error('Question generation failed:', genErr);
-          // Fallback placeholder questions
-          const questionsCol = collection(db, 'assignments', assignmentRef.id, 'questions');
-          for (let i = 0; i < questionCount; i++) {
-            await addDoc(questionsCol, {
-              textEn: `Question ${i + 1}: Please explain this aspect of your work.`,
-              textAr: `سؤال ${i + 1}: يرجى شرح هذا الجانب من عملك.`,
-              order: i,
-            });
-          }
-        }
-      }
 
-      // Mark assignment ready
-      const { updateDoc, doc } = await import('firebase/firestore');
-      await updateDoc(doc(db, 'assignments', assignmentRef.id), { status: 'Active' });
+          // Persist summary and mark ready
+          await updateDoc(doc(db, 'assignments', assignmentRef.id), {
+            status: 'Active',
+            summaryText,
+            summaryGeneratedAt: serverTimestamp(),
+          });
+        } catch (genErr: any) {
+          console.error('Summary/question generation failed:', genErr);
+          // Mark active even without questions so the assignment is usable
+          await updateDoc(doc(db, 'assignments', assignmentRef.id), { status: 'Active' });
+          // Surface the real error so the educator knows to regenerate from AssignmentDetail
+          setErrorMessage(
+            `Assignment created, but AI question generation failed: ${genErr?.message || 'unknown error'}. ` +
+            'Open the assignment and click "Generate" to retry.'
+          );
+          setProcessingStep('error');
+          return;
+        }
+      } else {
+        // Manual mode — just mark active, no questions generated
+        await updateDoc(doc(db, 'assignments', assignmentRef.id), { status: 'Active' });
+      }
 
       await logAudit('Assignment Created', `Assignment "${title}" created`, educatorId);
       setProcessingStep('done');

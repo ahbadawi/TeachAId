@@ -200,6 +200,7 @@ function RosterSection({ courses, educatorId }: { courses: Course[]; educatorId:
   const [showUpload, setShowUpload] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [dupeIds, setDupeIds] = useState<Set<string>>(new Set());
+  const [removingDupes, setRemovingDupes] = useState(false);
 
   useEffect(() => {
     if (!selectedCourseId) { setStudents([]); return; }
@@ -231,6 +232,29 @@ function RosterSection({ courses, educatorId }: { courses: Course[]; educatorId:
     setDeletingId(studentId);
     try { await deleteDoc(doc(db, 'students', studentId)); }
     finally { setDeletingId(null); }
+  };
+
+  // Keep the first occurrence of each studentId, delete all later duplicates.
+  const handleRemoveDuplicates = async () => {
+    setRemovingDupes(true);
+    try {
+      const seenIds = new Set<string>();
+      const toDelete: string[] = [];
+      students.forEach(s => {
+        const k = (s.studentId || '').toLowerCase();
+        if (seenIds.has(k)) {
+          toDelete.push(s.id);
+        } else {
+          seenIds.add(k);
+        }
+      });
+      if (toDelete.length === 0) return;
+      const batch = writeBatch(db);
+      toDelete.forEach(id => batch.delete(doc(db, 'students', id)));
+      await batch.commit();
+    } finally {
+      setRemovingDupes(false);
+    }
   };
 
   const selectedCourse = courses.find(c => c.id === selectedCourseId);
@@ -267,8 +291,18 @@ function RosterSection({ courses, educatorId }: { courses: Course[]; educatorId:
           </div>
 
           {dupeIds.size > 0 && (
-            <div className="bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3 text-xs text-amber-700">
-              <strong>Duplicate student IDs detected.</strong> Review below and remove duplicates manually before sending invites.
+            <div className="bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3 flex items-center justify-between gap-4">
+              <p className="text-xs text-amber-700">
+                <strong>Duplicate student IDs detected.</strong> The first occurrence of each ID will be kept; all later duplicates will be removed.
+              </p>
+              <button
+                onClick={handleRemoveDuplicates}
+                disabled={removingDupes}
+                className="shrink-0 flex items-center gap-1.5 bg-amber-600 text-white text-xs font-medium px-3 py-1.5 rounded-xl hover:bg-amber-700 disabled:opacity-50"
+              >
+                {removingDupes ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                Remove {dupeIds.size} Duplicate{dupeIds.size !== 1 ? 's' : ''}
+              </button>
             </div>
           )}
 

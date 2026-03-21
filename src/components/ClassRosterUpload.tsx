@@ -41,8 +41,14 @@ function studentIdScore(header: string, values: string[]): number {
   const headerHint = ['studentid', 'id', 'stuid', 'sid', 'matricno', 'matric', 'universityid', 'rollno', 'roll'].some(k => h === k || h.includes(k)) ? 0.5 : 0;
   const nonEmpty = values.filter(v => v.length > 0);
   if (!nonEmpty.length) return headerHint;
-  // Student IDs: short alphanumeric, no spaces, no @
-  const idLike = nonEmpty.filter(v => !v.includes('@') && STUDENT_ID_RE.test(v.replace(/\s/g, ''))).length;
+  // Student IDs must be alphanumeric AND contain at least one digit.
+  // Pure-letter strings (e.g. first names "Ahmed", "Sara") must NOT score as IDs.
+  // Without the digit requirement, name columns were misidentified as the ID column.
+  const idLike = nonEmpty.filter(v =>
+    !v.includes('@') &&
+    STUDENT_ID_RE.test(v.replace(/\s/g, '')) &&
+    /\d/.test(v)   // must have at least one digit
+  ).length;
   return headerHint + 0.5 * (idLike / nonEmpty.length);
 }
 

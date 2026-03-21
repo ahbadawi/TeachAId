@@ -141,7 +141,12 @@ export async function generateAssignmentSummary(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ briefText, rubricText, questionCount }),
   });
-  if (!res.ok) throw new Error('Summary generation failed');
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(
+      (errData as any).detail || (errData as any).error || `Summary generation failed (${res.status})`
+    );
+  }
   return res.json() as Promise<{ summaryText: string; questions: GeneratedQuestion[]; rubricText: string }>;
 }
 
