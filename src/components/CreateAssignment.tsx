@@ -117,13 +117,20 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
           console.error('Summary/question generation failed:', genErr);
           // Mark active even without questions so the assignment is usable
           await updateDoc(doc(db, 'assignments', assignmentRef.id), { status: 'Active' });
-          // Surface a meaningful error — "Failed to fetch" means the Express API server is not running
           const rawMsg: string = genErr?.message || 'unknown error';
-          const apiDown = rawMsg.toLowerCase().includes('fetch') || rawMsg.toLowerCase().includes('network');
+          // Distinguish the three failure modes:
+          // 1. "Failed to fetch" (exact browser TypeError) → Express server not running
+          // 2. "429" in the Gemini error detail → API quota exhausted
+          // 3. Anything else → surface the server error directly
+          const serverDown = rawMsg === 'Failed to fetch' || rawMsg === 'NetworkError when attempting to fetch resource';
+          const quotaExceeded = rawMsg.includes('429') || rawMsg.toLowerCase().includes('quota') || rawMsg.toLowerCase().includes('rate limit');
           setErrorMessage(
-            apiDown
+            serverDown
               ? 'Assignment created, but the API server is not running. ' +
                 'Run "npm start" (starts both Vite and the Express server together), then open the assignment to generate questions.'
+              : quotaExceeded
+              ? 'Assignment created, but the AI question generation hit a quota limit (Gemini 429). ' +
+                'Wait a minute and then open the assignment to retry, or check your Google AI Studio quota at ai.google.dev.'
               : `Assignment created, but AI question generation failed: ${rawMsg}. ` +
                 'Open the assignment and click "Generate" to retry.'
           );

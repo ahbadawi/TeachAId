@@ -152,7 +152,8 @@ export async function extractTextFromUrl(url: string): Promise<string> {
   });
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
-    throw new Error((errData as any).error || (errData as any).detail || 'Text extraction failed');
+    // Prefer detail (contains the real upstream error, e.g. Gemini 429) over the generic message
+    throw new Error((errData as any).detail || (errData as any).error || 'Text extraction failed');
   }
   const data = await res.json();
   return (data as any).text as string;
