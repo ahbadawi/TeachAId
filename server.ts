@@ -6,6 +6,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import sharp from 'sharp';
 import nodemailer from 'nodemailer';
 import sgMail from '@sendgrid/mail';
+import { google } from 'googleapis';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
@@ -517,6 +518,21 @@ app.get('/api/smtp-accounts', (_req, res) => {
   res.json({ accounts: configured });
 });
 
+// Build a Gmail OAuth2 transporter on demand (tokens come from env vars set once)
+function buildGmailTransporter() {
+  const clientId     = process.env.GMAIL_CLIENT_ID     || '';
+  const clientSecret = process.env.GMAIL_CLIENT_SECRET || '';
+  const refreshToken = process.env.GMAIL_REFRESH_TOKEN || '';
+  const user         = process.env.GMAIL_USER          || 'ashraf.badawi@gmail.com';
+  if (!clientId || !clientSecret || !refreshToken) return null;
+  const oauth2 = new google.auth.OAuth2(clientId, clientSecret, 'https://developers.google.com/oauthplayground');
+  oauth2.setCredentials({ refresh_token: refreshToken });
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: { type: 'OAuth2', user, clientId, clientSecret, refreshToken, accessToken: oauth2.getAccessToken },
+  } as any);
+}
+
 app.post('/api/send-invites', async (req, res) => {
   try {
     const { invites, assignmentTitle, subject, body, fromAccount = 'gmail' } = req.body as {
@@ -528,32 +544,49 @@ app.post('/api/send-invites', async (req, res) => {
     };
     if (!invites?.length) { res.status(400).json({ error: 'invites array required' }); return; }
 
-    const sendgridKey = process.env.SENDGRID_API_KEY || '';
-    const useSendGrid = sendgridKey.length > 0;
+    // Helper: personalise subject/body/html for one invite
+    const buildMessage = (invite: { name: string; email: string; inviteUrl: string }) => {
+      const pSubject = subject.replace(/\{\{name\}\}/g, invite.name).replace(/\{\{assignment\}\}/g, assignmentTitle);
+      const pBody    = body.replace(/\{\{name\}\}/g, invite.name).replace(/\{\{assignment\}\}/g, assignmentTitle).replace(/\{\{link\}\}/g, invite.inviteUrl);
+      const htmlBody = buildInviteEmailHtml(invite.name, assignmentTitle, invite.inviteUrl);
+      const useCustom = body.trim().length > 0;
+      return {
+        subject: pSubject,
+        text:    useCustom ? pBody : `Dear ${invite.name},\n\nYou are invited to complete an integrity interview for: ${assignmentTitle}\n\nStart here: ${invite.inviteUrl}`,
+        html:    useCustom ? `<pre style="font-family: inherit;">${pBody}</pre>` : htmlBody,
+      };
+    };
 
-    // SendGrid path — uses HTTPS, works on all cloud hosts including Render free tier
-    if (useSendGrid) {
-      sgMail.setApiKey(sendgridKey);
-      const acct = SMTP_ACCOUNTS[fromAccount] || SMTP_ACCOUNTS.gmail;
-      const fromEmail = acct.from;
+    const results: { studentId: string; status: 'sent' | 'failed'; error?: string }[] = [];
 
-      const results: { studentId: string; status: 'sent' | 'failed'; error?: string }[] = [];
+    // ── 1. Gmail OAuth2 (free, unlimited, uses existing Gmail account) ──────────
+    const gmailTransporter = buildGmailTransporter();
+    if (gmailTransporter) {
+      const fromEmail = process.env.GMAIL_USER || 'ashraf.badawi@gmail.com';
       for (const invite of invites) {
         try {
-          const personalizedSubject = subject.replace(/\{\{name\}\}/g, invite.name).replace(/\{\{assignment\}\}/g, assignmentTitle);
-          const personalizedBody = body
-            .replace(/\{\{name\}\}/g, invite.name)
-            .replace(/\{\{assignment\}\}/g, assignmentTitle)
-            .replace(/\{\{link\}\}/g, invite.inviteUrl);
-          const htmlBody = buildInviteEmailHtml(invite.name, assignmentTitle, invite.inviteUrl);
-          const useCustom = body.trim().length > 0;
-          await sgMail.send({
-            from: { email: fromEmail, name: 'TeachAId' },
-            to: invite.email,
-            subject: personalizedSubject,
-            text: useCustom ? personalizedBody : `Dear ${invite.name},\n\nYou are invited to complete an integrity interview for: ${assignmentTitle}\n\nStart here: ${invite.inviteUrl}`,
-            html: useCustom ? `<pre style="font-family: inherit;">${personalizedBody}</pre>` : htmlBody,
-          });
+          const msg = buildMessage(invite);
+          await gmailTransporter.sendMail({ from: `TeachAId <${fromEmail}>`, to: invite.email, ...msg });
+          console.log(`[send-invites] Gmail OAuth2 sent to ${invite.email}`);
+          results.push({ studentId: invite.studentId, status: 'sent' });
+        } catch (err: any) {
+          console.error(`[send-invites] Gmail OAuth2 error for ${invite.email}:`, err.message);
+          results.push({ studentId: invite.studentId, status: 'failed', error: err.message });
+        }
+      }
+      res.json({ results });
+      return;
+    }
+
+    // ── 2. SendGrid API (HTTPS, works on Render; free 100/day trial) ────────────
+    const sendgridKey = process.env.SENDGRID_API_KEY || '';
+    if (sendgridKey) {
+      sgMail.setApiKey(sendgridKey);
+      const fromEmail = (SMTP_ACCOUNTS[fromAccount] || SMTP_ACCOUNTS.gmail).from;
+      for (const invite of invites) {
+        try {
+          const msg = buildMessage(invite);
+          await sgMail.send({ from: { email: fromEmail, name: 'TeachAId' }, to: invite.email, ...msg });
           console.log(`[send-invites] SendGrid sent to ${invite.email}`);
           results.push({ studentId: invite.studentId, status: 'sent' });
         } catch (err: any) {
@@ -566,40 +599,20 @@ app.post('/api/send-invites', async (req, res) => {
       return;
     }
 
-    // SMTP fallback (works locally; blocked on Render free tier)
+    // ── 3. SMTP fallback (works locally; blocked on Render free tier) ───────────
     const acct = SMTP_ACCOUNTS[fromAccount] || SMTP_ACCOUNTS.gmail;
-    const smtpHost = acct.host;
-    const smtpUser = acct.user;
-    const smtpPass = acct.pass;
-    const smtpFrom = acct.from;
-    const smtpPort = acct.port;
-
-    if (!smtpHost || !smtpUser || !smtpPass) {
-      res.status(503).json({ error: 'Email not configured. Set SENDGRID_API_KEY (recommended) or SMTP_GMAIL_USER + SMTP_GMAIL_PASS in environment.' });
+    if (!acct.user || !acct.pass) {
+      res.status(503).json({ error: 'Email not configured. Set GMAIL_CLIENT_ID + GMAIL_CLIENT_SECRET + GMAIL_REFRESH_TOKEN in Render environment variables.' });
       return;
     }
-
     const transporter = nodemailer.createTransport({
-      host: smtpHost, port: smtpPort, secure: smtpPort === 465,
-      auth: { user: smtpUser, pass: smtpPass },
+      host: acct.host, port: acct.port, secure: acct.port === 465,
+      auth: { user: acct.user, pass: acct.pass },
     });
-
-    const results: { studentId: string; status: 'sent' | 'failed'; error?: string }[] = [];
     for (const invite of invites) {
       try {
-        const personalizedSubject = subject.replace(/\{\{name\}\}/g, invite.name).replace(/\{\{assignment\}\}/g, assignmentTitle);
-        const personalizedBody = body
-          .replace(/\{\{name\}\}/g, invite.name)
-          .replace(/\{\{assignment\}\}/g, assignmentTitle)
-          .replace(/\{\{link\}\}/g, invite.inviteUrl);
-        const htmlBody = buildInviteEmailHtml(invite.name, assignmentTitle, invite.inviteUrl);
-        const useCustom = body.trim().length > 0;
-        await transporter.sendMail({
-          from: smtpFrom, to: invite.email,
-          subject: personalizedSubject,
-          text: useCustom ? personalizedBody : `Dear ${invite.name},\n\nYou are invited to complete an integrity interview for: ${assignmentTitle}\n\nStart here: ${invite.inviteUrl}`,
-          html: useCustom ? `<pre style="font-family: inherit;">${personalizedBody}</pre>` : htmlBody,
-        });
+        const msg = buildMessage(invite);
+        await transporter.sendMail({ from: acct.from, to: invite.email, ...msg });
         results.push({ studentId: invite.studentId, status: 'sent' });
       } catch (err: any) {
         console.error(`[send-invites] SMTP error for ${invite.email}:`, err.message);
