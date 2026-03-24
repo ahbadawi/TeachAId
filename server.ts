@@ -563,6 +563,7 @@ app.post('/api/send-invites', async (req, res) => {
         });
         results.push({ studentId: invite.studentId, status: 'sent' });
       } catch (err: any) {
+        console.error(`[send-invites] SMTP error for ${invite.email}:`, err.message);
         results.push({ studentId: invite.studentId, status: 'failed', error: err.message });
       }
     }
