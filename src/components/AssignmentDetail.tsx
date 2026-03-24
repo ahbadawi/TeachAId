@@ -36,8 +36,9 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
   const [uploadingBrief, setUploadingBrief] = useState(false);
   const [uploadingRubric, setUploadingRubric] = useState(false);
 
-  // AI summary
+  // AI summary + rubric
   const [summary, setSummary] = useState(assignment.summaryText || '');
+  const [rubric, setRubric] = useState(assignment.rubricText || '');
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [summaryStep, setSummaryStep] = useState('');
   const [summaryError, setSummaryError] = useState('');
@@ -141,15 +142,18 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
       ]);
       if (!briefText.trim()) throw new Error('Could not extract text from the brief file. Ensure it is a readable PDF, DOCX, or TXT.');
       setSummaryStep(`Generating summary and ${liveAssignment.questionCount} questions with AI…`);
-      const { summaryText, questions: newQs } = await generateAssignmentSummary(briefText, rubricText, liveAssignment.questionCount);
+      const { summaryText, questions: newQs, rubricText: effectiveRubric } =
+        await generateAssignmentSummary(briefText, rubricText, liveAssignment.questionCount);
 
-      // Save summary to Firestore
+      // Save summary + rubric to Firestore
       await updateDoc(doc(db, 'assignments', liveAssignment.id), {
         summaryText,
+        rubricText: effectiveRubric,
         summaryGeneratedAt: serverTimestamp(),
       });
       setSummary(summaryText);
-      setLiveAssignment(prev => ({ ...prev, summaryText }));
+      setRubric(effectiveRubric);
+      setLiveAssignment(prev => ({ ...prev, summaryText, rubricText: effectiveRubric }));
 
       // Save questions inline on the assignment doc (avoids subcollection permission issues)
       const questionsArray = newQs.map((q, i) => ({
@@ -303,7 +307,15 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
             {summaryStep || 'Working…'}
           </div>
         ) : summary ? (
-          <p className="text-sm text-stone-700 leading-relaxed">{summary}</p>
+          <div className="space-y-4">
+            <p className="text-sm text-stone-700 leading-relaxed">{summary}</p>
+            {rubric && (
+              <div className="border-t border-stone-100 pt-4">
+                <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2">Grading Rubric</p>
+                <p className="text-sm text-stone-600 leading-relaxed whitespace-pre-wrap">{rubric}</p>
+              </div>
+            )}
+          </div>
         ) : (
           <p className="text-sm text-stone-400 py-2">
             No summary yet.{liveAssignment.briefFileUrl ? ' Click "Generate" above.' : ' Upload a brief file first.'}
