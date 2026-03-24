@@ -109,50 +109,16 @@ export function cancelSpeech(): void {
 }
 
 // ─── Extract text from a file URL (brief/rubric) ─────────────────────────────
-// Downloads the file client-side (Firebase Storage tokens allow browser fetch),
-// then sends raw bytes as base64 to the server for Gemini processing.
-// This avoids server-side Firebase Storage auth/network issues.
+// Sends the Firebase Storage URL to the server so the server downloads the file
+// directly. This avoids browser CORS issues when fetching from Firebase Storage.
 export async function extractTextFromUrl(url: string): Promise<string> {
-  // Detect file type from URL
-  const urlPath = new URL(url).pathname;
-  const decoded = decodeURIComponent(urlPath);
-  const filename = decoded.split('/').pop()?.split('?')[0] || '';
-  const ext = filename.split('.').pop()?.toLowerCase() || '';
-
-  let mimeType = 'application/pdf';
-  if (ext === 'docx' || ext === 'doc') {
-    mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-  } else if (ext === 'txt' || ext === 'md') {
-    // Plain text: just fetch and return directly, no server round-trip needed
-    const textRes = await fetch(url);
-    if (!textRes.ok) throw new Error(`Could not download file (${textRes.status})`);
-    return textRes.text();
-  }
-
-  // Download the file in the browser (the Firebase token in the URL grants access)
-  const fileRes = await fetch(url);
-  if (!fileRes.ok) throw new Error(`Could not download file (${fileRes.status})`);
-
-  const buffer = await fileRes.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-
-  // Convert to base64 in chunks to avoid call-stack overflow on large files
-  let binary = '';
-  const CHUNK = 8192;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + CHUNK, bytes.length)));
-  }
-  const base64 = btoa(binary);
-
-  // Send bytes to server for Gemini processing
   const res = await fetch(`${API_BASE}/extract-text`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ data: base64, mimeType }),
+    body: JSON.stringify({ url }),
   });
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
-    // Prefer detail (contains the real upstream error, e.g. Gemini 429) over the generic message
     throw new Error((errData as any).detail || (errData as any).error || 'Text extraction failed');
   }
   const data = await res.json();
