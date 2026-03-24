@@ -93,26 +93,21 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
           const { summaryText, questions: generatedQuestions, rubricText: effectiveRubric } =
             await generateAssignmentSummary(briefText, rubricText, questionCount);
 
-          // Save questions to subcollection
-          const questionsCol = collection(db, 'assignments', assignmentRef.id, 'questions');
-          for (let i = 0; i < generatedQuestions.length; i++) {
-            await addDoc(questionsCol, {
-              textEn: generatedQuestions[i].textEn,
-              textAr: generatedQuestions[i].textAr,
-              followUpEn: generatedQuestions[i].followUpEn || null,
-              followUpAr: generatedQuestions[i].followUpAr || null,
-              order: i,
-            });
-          }
-
-          // Persist summary, effective rubric text, and mark ready.
-          // rubricText is stored so processSession can cross-reference answers against it
-          // without needing to re-download and re-parse the rubric file.
+          // Persist summary, questions (inline array — no subcollection), and mark ready.
+          // Storing questions inline avoids subcollection permission issues and simplifies reads.
+          const questionsArray = generatedQuestions.map((q, i) => ({
+            textEn: q.textEn,
+            textAr: q.textAr,
+            followUpEn: q.followUpEn || null,
+            followUpAr: q.followUpAr || null,
+            order: i,
+          }));
           await updateDoc(doc(db, 'assignments', assignmentRef.id), {
             status: 'Active',
             summaryText,
             rubricText: effectiveRubric,
             summaryGeneratedAt: serverTimestamp(),
+            questions: questionsArray,
           });
         } catch (genErr: any) {
           console.error('Summary/question generation failed:', genErr);

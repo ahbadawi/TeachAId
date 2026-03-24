@@ -126,19 +126,26 @@ export default function StudentPortal({ token }: Props) {
         setStudent({ id: studentDoc.id, ...studentDoc.data() } as Student);
         setTimeLeft(isTestMode ? 30 : 600);
 
-        // Load questions
-        const qDocs = await getDocs(
-          query(collection(db, 'assignments', assignmentDoc.id, 'questions'), orderBy('order'))
-        );
-        if (!qDocs.empty) {
-          setQuestions(qDocs.docs.map(d => ({ id: d.id, ...d.data() } as Question)));
+        // Load questions — prefer inline array on assignment doc (no subcollection permission needed),
+        // fall back to subcollection for backwards compatibility with older assignments.
+        const inlineQs: Question[] = assignmentData.questions || [];
+        if (inlineQs.length > 0) {
+          const sorted = [...inlineQs].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+          setQuestions(sorted.map((q, i) => ({ ...q, id: q.id ?? String(i) })));
         } else {
-          // Fallback placeholder questions
-          setQuestions([
-            { id: '1', textEn: 'Please explain the main argument of your submission in your own words.', textAr: 'يرجى شرح الحجة الرئيسية لعملك بكلماتك الخاصة.', order: 0 },
-            { id: '2', textEn: 'What was the most challenging part of this assignment?', textAr: 'ما هو الجزء الأكثر تحديًا في هذا التكليف؟', order: 1 },
-            { id: '3', textEn: 'How did you select your primary sources?', textAr: 'كيف اخترت مصادرك الأولية؟', order: 2 },
-          ]);
+          const qDocs = await getDocs(
+            query(collection(db, 'assignments', assignmentDoc.id, 'questions'), orderBy('order'))
+          );
+          if (!qDocs.empty) {
+            setQuestions(qDocs.docs.map(d => ({ id: d.id, ...d.data() } as Question)));
+          } else {
+            // Fallback placeholder questions
+            setQuestions([
+              { id: '1', textEn: 'Please explain the main argument of your submission in your own words.', textAr: 'يرجى شرح الحجة الرئيسية لعملك بكلماتك الخاصة.', order: 0 },
+              { id: '2', textEn: 'What was the most challenging part of this assignment?', textAr: 'ما هو الجزء الأكثر تحديًا في هذا التكليف؟', order: 1 },
+              { id: '3', textEn: 'How did you select your primary sources?', textAr: 'كيف اخترت مصادرك الأولية؟', order: 2 },
+            ]);
+          }
         }
 
         setStep('consent');

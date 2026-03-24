@@ -61,20 +61,28 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
     setQuestionCount(assignment.questionCount);
   }, [assignment.id]);
 
-  // Load questions subcollection
+  // Load questions — prefer inline array on assignment doc (no subcollection needed)
   useEffect(() => {
-    setLoadingQuestions(true);
-    const unsub = onSnapshot(
-      collection(db, 'assignments', liveAssignment.id, 'questions'),
-      snap => {
-        const qs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Question & { id: string }));
-        qs.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-        setQuestions(qs);
-        setLoadingQuestions(false);
-      }
-    );
-    return unsub;
-  }, [liveAssignment.id]);
+    const inlineQs: Question[] = liveAssignment.questions || [];
+    if (inlineQs.length > 0) {
+      const sorted = [...inlineQs].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      setQuestions(sorted.map((q, i) => ({ ...q, id: q.id ?? String(i) })));
+      setLoadingQuestions(false);
+    } else {
+      // Fall back to subcollection for older assignments
+      setLoadingQuestions(true);
+      const unsub = onSnapshot(
+        collection(db, 'assignments', liveAssignment.id, 'questions'),
+        snap => {
+          const qs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Question & { id: string }));
+          qs.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+          setQuestions(qs);
+          setLoadingQuestions(false);
+        }
+      );
+      return unsub;
+    }
+  }, [liveAssignment.id, liveAssignment.questions]);
 
   const saveEdits = async () => {
     setSaving(true);
@@ -143,12 +151,14 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
       setSummary(summaryText);
       setLiveAssignment(prev => ({ ...prev, summaryText }));
 
-      // Replace generic questions
-      const oldSnap = await getDocs(collection(db, 'assignments', liveAssignment.id, 'questions'));
-      await Promise.all(oldSnap.docs.map(d => deleteDoc(d.ref)));
-      for (let i = 0; i < newQs.length; i++) {
-        await addDoc(collection(db, 'assignments', liveAssignment.id, 'questions'), { ...newQs[i], order: i });
-      }
+      // Save questions inline on the assignment doc (avoids subcollection permission issues)
+      const questionsArray = newQs.map((q, i) => ({
+        textEn: q.textEn, textAr: q.textAr,
+        followUpEn: q.followUpEn || null, followUpAr: q.followUpAr || null,
+        order: i,
+      }));
+      await updateDoc(doc(db, 'assignments', liveAssignment.id), { questions: questionsArray });
+      setLiveAssignment(prev => ({ ...prev, questions: questionsArray }));
     } catch (err: any) {
       setSummaryError(err?.message || 'Failed to generate summary.');
     } finally {

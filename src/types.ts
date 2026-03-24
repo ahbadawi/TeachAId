@@ -52,6 +52,7 @@ export interface Assignment {
   summaryText?: string;
   rubricText?: string;     // effective rubric (provided or AI-generated) — stored for re-use at analysis time
   summaryGeneratedAt?: string;
+  questions?: Question[];  // stored inline on the assignment doc (avoids subcollection permission issues)
 }
 
 export interface Student {

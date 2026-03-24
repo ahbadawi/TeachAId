@@ -147,9 +147,17 @@ export default function ReportViewer({ sessionId, onClose, onPrevStudent, onNext
         } catch { /* chunk may not have audio */ }
       }
 
-      // Load questions for this assignment
-      const qDocs = await getDocs(query(collection(db, 'assignments', assignment.id, 'questions'), orderBy('order')));
-      const questions = qDocs.docs.map((d, i) => ({ index: i, textEn: (d.data().textEn as string) || '' }));
+      // Load questions — prefer inline array on assignment doc, fall back to subcollection
+      let questions: { index: number; textEn: string }[] = [];
+      const inlineQs = assignment.questions || [];
+      if (inlineQs.length > 0) {
+        questions = [...inlineQs]
+          .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+          .map((q, i) => ({ index: i, textEn: q.textEn || '' }));
+      } else {
+        const qDocs = await getDocs(query(collection(db, 'assignments', assignment.id, 'questions'), orderBy('order')));
+        questions = qDocs.docs.map((d, i) => ({ index: i, textEn: (d.data().textEn as string) || '' }));
+      }
 
       // Use stored rubric text if available; fall back to empty string (server will
       // regenerate a rubric from the brief if needed via ensureRubric())
