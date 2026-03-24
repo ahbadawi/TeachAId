@@ -41,7 +41,7 @@ const genai = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || '');
 
 function gemini(systemInstruction?: string) {
   return genai.getGenerativeModel({
-    model: 'gemini-1.5-flash',
+    model: 'gemini-2.0-flash',
     ...(systemInstruction ? { systemInstruction } : {}),
   });
 }
