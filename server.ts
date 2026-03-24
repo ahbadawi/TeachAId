@@ -576,6 +576,32 @@ app.post('/api/send-invites', async (req, res) => {
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => { res.json({ ok: true }); });
 
+// ─── API Key Diagnostic ────────────────────────────────────────────────────────
+app.get('/api/test-key', async (_req, res) => {
+  const key = process.env.GOOGLE_API_KEY || '';
+  const keyPreview = key.length > 8 ? `${key.slice(0, 6)}...${key.slice(-4)}` : '(not set)';
+  const keyLength = key.length;
+  const looksLikeFirebaseKey = key.startsWith('AIzaSy') && keyLength === 39;
+  // Gemini API keys from AI Studio also start with AIzaSy but are 39 chars — same format as Firebase keys
+  // The only way to tell is to actually call the API
+  let apiTestResult = '';
+  let apiTestError = '';
+  try {
+    const testResult = await gemini('Test').generateContent('Say "API key is working" in 5 words.');
+    apiTestResult = testResult.response.text().slice(0, 100);
+  } catch (err: any) {
+    apiTestError = String(err?.message || err).slice(0, 300);
+  }
+  res.json({
+    keyPreview,
+    keyLength,
+    looksLikeFirebaseKey,
+    apiTestResult: apiTestResult || null,
+    apiTestError: apiTestError || null,
+    note: 'Both Firebase web keys and Gemini API keys start with AIzaSy and are 39 chars. If apiTestError contains 429, the key is exhausted. If it contains "API_KEY_INVALID", the key is the wrong type (e.g. a Firebase key used here). If apiTestResult has text, the key is correct and working.',
+  });
+});
+
 // ─── Static frontend (production) ─────────────────────────────────────────────
 const distDir = join(__dirname, 'dist');
 if (existsSync(distDir)) {
