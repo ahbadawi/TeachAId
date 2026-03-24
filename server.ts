@@ -5,6 +5,7 @@ import multer from 'multer';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import sharp from 'sharp';
 import nodemailer from 'nodemailer';
+import sgMail from '@sendgrid/mail';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
@@ -527,6 +528,45 @@ app.post('/api/send-invites', async (req, res) => {
     };
     if (!invites?.length) { res.status(400).json({ error: 'invites array required' }); return; }
 
+    const sendgridKey = process.env.SENDGRID_API_KEY || '';
+    const useSendGrid = sendgridKey.length > 0;
+
+    // SendGrid path — uses HTTPS, works on all cloud hosts including Render free tier
+    if (useSendGrid) {
+      sgMail.setApiKey(sendgridKey);
+      const acct = SMTP_ACCOUNTS[fromAccount] || SMTP_ACCOUNTS.gmail;
+      const fromEmail = acct.from;
+
+      const results: { studentId: string; status: 'sent' | 'failed'; error?: string }[] = [];
+      for (const invite of invites) {
+        try {
+          const personalizedSubject = subject.replace(/\{\{name\}\}/g, invite.name).replace(/\{\{assignment\}\}/g, assignmentTitle);
+          const personalizedBody = body
+            .replace(/\{\{name\}\}/g, invite.name)
+            .replace(/\{\{assignment\}\}/g, assignmentTitle)
+            .replace(/\{\{link\}\}/g, invite.inviteUrl);
+          const htmlBody = buildInviteEmailHtml(invite.name, assignmentTitle, invite.inviteUrl);
+          const useCustom = body.trim().length > 0;
+          await sgMail.send({
+            from: { email: fromEmail, name: 'TeachAId' },
+            to: invite.email,
+            subject: personalizedSubject,
+            text: useCustom ? personalizedBody : `Dear ${invite.name},\n\nYou are invited to complete an integrity interview for: ${assignmentTitle}\n\nStart here: ${invite.inviteUrl}`,
+            html: useCustom ? `<pre style="font-family: inherit;">${personalizedBody}</pre>` : htmlBody,
+          });
+          console.log(`[send-invites] SendGrid sent to ${invite.email}`);
+          results.push({ studentId: invite.studentId, status: 'sent' });
+        } catch (err: any) {
+          const detail = err?.response?.body?.errors?.[0]?.message || err.message;
+          console.error(`[send-invites] SendGrid error for ${invite.email}:`, detail);
+          results.push({ studentId: invite.studentId, status: 'failed', error: detail });
+        }
+      }
+      res.json({ results });
+      return;
+    }
+
+    // SMTP fallback (works locally; blocked on Render free tier)
     const acct = SMTP_ACCOUNTS[fromAccount] || SMTP_ACCOUNTS.gmail;
     const smtpHost = acct.host;
     const smtpUser = acct.user;
@@ -535,7 +575,7 @@ app.post('/api/send-invites', async (req, res) => {
     const smtpPort = acct.port;
 
     if (!smtpHost || !smtpUser || !smtpPass) {
-      res.status(503).json({ error: 'Email not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM in environment.' });
+      res.status(503).json({ error: 'Email not configured. Set SENDGRID_API_KEY (recommended) or SMTP_GMAIL_USER + SMTP_GMAIL_PASS in environment.' });
       return;
     }
 
@@ -553,7 +593,6 @@ app.post('/api/send-invites', async (req, res) => {
           .replace(/\{\{assignment\}\}/g, assignmentTitle)
           .replace(/\{\{link\}\}/g, invite.inviteUrl);
         const htmlBody = buildInviteEmailHtml(invite.name, assignmentTitle, invite.inviteUrl);
-        // Use professor's custom body if it differs from default, else use HTML template
         const useCustom = body.trim().length > 0;
         await transporter.sendMail({
           from: smtpFrom, to: invite.email,
