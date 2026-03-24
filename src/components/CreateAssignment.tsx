@@ -24,6 +24,7 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
   const [briefFile, setBriefFile] = useState<File | null>(null);
   const [rubricFile, setRubricFile] = useState<File | null>(null);
   const [questionCount, setQuestionCount] = useState(12);
+  const [responseTimeLimit, setResponseTimeLimit] = useState(90);
   const [questionMode, setQuestionMode] = useState<QuestionMode>('AI-Generated');
   const [captureMode, setCaptureMode] = useState<'Snapshot' | 'Video'>('Snapshot');
   const [windowOpen, setWindowOpen] = useState(() => new Date().toISOString().slice(0, 16));
@@ -71,7 +72,7 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
         captureMode,
         windowOpen: new Date(windowOpen).toISOString(),
         windowClose: new Date(windowClose).toISOString(),
-        responseTimeLimit: 60,
+        responseTimeLimit,
         status: 'Processing',
         createdAt: serverTimestamp(),
       });
@@ -247,18 +248,27 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-stone-700 mb-1">Capture Mode</label>
-                <div className="flex bg-stone-100 p-1 rounded-xl">
-                  {(['Snapshot', 'Video'] as const).map(mode => (
-                    <button key={mode} type="button" onClick={() => setCaptureMode(mode)}
-                      className={cn("flex-1 py-1.5 text-xs font-medium rounded-lg transition-all",
-                        captureMode === mode ? "bg-white text-stone-900 shadow-sm" : "text-stone-500")}>
-                      {mode}
-                    </button>
-                  ))}
-                </div>
-                {captureMode === 'Video' && <p className="text-xs text-amber-600 mt-1">Video records continuously during each response.</p>}
+                <label className="block text-sm font-medium text-stone-700 mb-1">
+                  Response Time Limit: <span className="text-emerald-600 font-bold">{responseTimeLimit}s</span>
+                </label>
+                <input type="range" min="30" max="180" step="30" value={responseTimeLimit} onChange={e => setResponseTimeLimit(parseInt(e.target.value))}
+                  className="w-full accent-emerald-600" />
+                <div className="flex justify-between text-xs text-stone-400 mt-1"><span>30s</span><span>180s</span></div>
               </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-stone-700 mb-1">Capture Mode</label>
+              <div className="flex bg-stone-100 p-1 rounded-xl">
+                {(['Snapshot', 'Video'] as const).map(mode => (
+                  <button key={mode} type="button" onClick={() => setCaptureMode(mode)}
+                    className={cn("flex-1 py-1.5 text-xs font-medium rounded-lg transition-all",
+                      captureMode === mode ? "bg-white text-stone-900 shadow-sm" : "text-stone-500")}>
+                    {mode}
+                  </button>
+                ))}
+              </div>
+              {captureMode === 'Video' && <p className="text-xs text-amber-600 mt-1">Video records continuously during each response.</p>}
             </div>
 
             {processingStep !== 'idle' && processingStep !== 'error' && (

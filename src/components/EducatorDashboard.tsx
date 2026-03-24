@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { db, auth } from '../firebase';
 import { collection, query, where, onSnapshot, doc, updateDoc, getDocs } from 'firebase/firestore';
 import { Educator, Course, Assignment, InterviewSession } from '../types';
-import { Plus, BookOpen, ClipboardList, LogOut, Search, Bell, Loader2, History, FileText, ShieldCheck } from 'lucide-react';
+import { Plus, BookOpen, ClipboardList, LogOut, Search, Bell, Loader2, History, FileText, ShieldCheck, Settings } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import CreateAssignment from './CreateAssignment';
@@ -38,7 +38,7 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
   const [courses, setCourses] = useState<Course[]>(isDev ? DEV_COURSES : []);
   const [assignments, setAssignments] = useState<Assignment[]>(isDev ? DEV_ASSIGNMENTS : []);
   const [sessions, setSessions] = useState<InterviewSession[]>(isDev ? DEV_SESSIONS : []);
-  const [activeTab, setActiveTab] = useState<'overview' | 'assignments' | 'courses' | 'logs' | 'admin'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'assignments' | 'courses' | 'logs' | 'admin' | 'settings'>('overview');
   const [showCreateAssignment, setShowCreateAssignment] = useState(false);
   const [showCreateCourse, setShowCreateCourse] = useState(false);
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
@@ -134,6 +134,9 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
           <NavItem icon={<ShieldCheck className="w-5 h-5" />} label="Admin"
             active={activeTab === 'admin'}
             onClick={() => setActiveTab('admin')} />
+          <NavItem icon={<Settings className="w-5 h-5" />} label="Settings"
+            active={activeTab === 'settings'}
+            onClick={() => setActiveTab('settings')} />
         </nav>
 
         <div className="p-4 border-t border-stone-100">
@@ -355,6 +358,51 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
               {activeTab === 'logs' && <AuditLogs />}
               {activeTab === 'admin' && (
                 <AdminPanel educatorId={educator.id} institutionId={educator.institutionId} />
+              )}
+              {activeTab === 'settings' && (
+                <div className="max-w-2xl space-y-8">
+                  <div>
+                    <h2 className="text-xl font-semibold text-stone-900 mb-1">Settings</h2>
+                    <p className="text-sm text-stone-500">Platform defaults for new assignments. Individual assignments can override these.</p>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-stone-200 divide-y divide-stone-100">
+                    <div className="p-5">
+                      <h3 className="text-sm font-semibold text-stone-700 mb-4">Assignment Defaults</h3>
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm text-stone-600 mb-1">Default Question Count</label>
+                          <p className="text-xs text-stone-400">Set per assignment when creating. Default: 12.</p>
+                        </div>
+                        <div>
+                          <label className="block text-sm text-stone-600 mb-1">Default Response Time</label>
+                          <p className="text-xs text-stone-400">Set per assignment when creating. Default: 90s.</p>
+                        </div>
+                        <div>
+                          <label className="block text-sm text-stone-600 mb-1">Default Capture Mode</label>
+                          <p className="text-xs text-stone-400">Snapshot captures periodic images. Video records full session.</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-5">
+                      <h3 className="text-sm font-semibold text-stone-700 mb-4">Testing Mode</h3>
+                      <p className="text-sm text-stone-600 mb-2">
+                        Reduces interview timers for testing purposes. Append <code className="bg-stone-100 px-1.5 py-0.5 rounded text-xs font-mono">?test=true</code> to the student link to activate.
+                      </p>
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700">
+                        Testing mode is URL-based. Share links with <code className="font-mono">?test=true</code> only with testers — never real students.
+                      </div>
+                    </div>
+
+                    <div className="p-5">
+                      <h3 className="text-sm font-semibold text-stone-700 mb-4">Data & Privacy</h3>
+                      <p className="text-sm text-stone-600">
+                        Session recordings, snapshots, and transcripts are stored in Firebase Storage and Firestore under your institution. Contact your administrator to configure retention policies.
+                      </p>
+                    </div>
+                  </div>
+                </div>
               )}
             </motion.div>
           )}
