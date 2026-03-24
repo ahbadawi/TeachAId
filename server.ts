@@ -6,7 +6,6 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import sharp from 'sharp';
 import nodemailer from 'nodemailer';
 import sgMail from '@sendgrid/mail';
-import { google } from 'googleapis';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
@@ -518,21 +517,6 @@ app.get('/api/smtp-accounts', (_req, res) => {
   res.json({ accounts: configured });
 });
 
-// Build a Gmail OAuth2 transporter on demand (tokens come from env vars set once)
-function buildGmailTransporter() {
-  const clientId     = process.env.GMAIL_CLIENT_ID     || '';
-  const clientSecret = process.env.GMAIL_CLIENT_SECRET || '';
-  const refreshToken = process.env.GMAIL_REFRESH_TOKEN || '';
-  const user         = process.env.GMAIL_USER          || 'ashraf.badawi@gmail.com';
-  if (!clientId || !clientSecret || !refreshToken) return null;
-  const oauth2 = new google.auth.OAuth2(clientId, clientSecret, 'https://developers.google.com/oauthplayground');
-  oauth2.setCredentials({ refresh_token: refreshToken });
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: { type: 'OAuth2', user, clientId, clientSecret, refreshToken, accessToken: oauth2.getAccessToken },
-  } as any);
-}
-
 app.post('/api/send-invites', async (req, res) => {
   try {
     const { invites, assignmentTitle, subject, body, fromAccount = 'gmail' } = req.body as {
@@ -558,19 +542,33 @@ app.post('/api/send-invites', async (req, res) => {
     };
 
     const results: { studentId: string; status: 'sent' | 'failed'; error?: string }[] = [];
+    const fromEmail = (SMTP_ACCOUNTS[fromAccount] || SMTP_ACCOUNTS.gmail).from;
 
-    // ── 1. Gmail OAuth2 (free, unlimited, uses existing Gmail account) ──────────
-    const gmailTransporter = buildGmailTransporter();
-    if (gmailTransporter) {
-      const fromEmail = process.env.GMAIL_USER || 'ashraf.badawi@gmail.com';
+    // ── 1. Brevo (formerly Sendinblue) — free forever, 300/day, HTTPS API ───────
+    const brevoKey = process.env.BREVO_API_KEY || '';
+    if (brevoKey) {
       for (const invite of invites) {
         try {
           const msg = buildMessage(invite);
-          await gmailTransporter.sendMail({ from: `TeachAId <${fromEmail}>`, to: invite.email, ...msg });
-          console.log(`[send-invites] Gmail OAuth2 sent to ${invite.email}`);
+          const brevoRes = await fetch('https://api.brevo.com/v3/smtp/email', {
+            method: 'POST',
+            headers: { 'api-key': brevoKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sender: { name: 'TeachAId', email: fromEmail },
+              to: [{ email: invite.email, name: invite.name }],
+              subject: msg.subject,
+              textContent: msg.text,
+              htmlContent: msg.html,
+            }),
+          });
+          if (!brevoRes.ok) {
+            const errBody = await brevoRes.json().catch(() => ({})) as any;
+            throw new Error(errBody?.message || `Brevo HTTP ${brevoRes.status}`);
+          }
+          console.log(`[send-invites] Brevo sent to ${invite.email}`);
           results.push({ studentId: invite.studentId, status: 'sent' });
         } catch (err: any) {
-          console.error(`[send-invites] Gmail OAuth2 error for ${invite.email}:`, err.message);
+          console.error(`[send-invites] Brevo error for ${invite.email}:`, err.message);
           results.push({ studentId: invite.studentId, status: 'failed', error: err.message });
         }
       }
@@ -578,11 +576,10 @@ app.post('/api/send-invites', async (req, res) => {
       return;
     }
 
-    // ── 2. SendGrid API (HTTPS, works on Render; free 100/day trial) ────────────
+    // ── 2. SendGrid API — HTTPS, works on Render ─────────────────────────────────
     const sendgridKey = process.env.SENDGRID_API_KEY || '';
     if (sendgridKey) {
       sgMail.setApiKey(sendgridKey);
-      const fromEmail = (SMTP_ACCOUNTS[fromAccount] || SMTP_ACCOUNTS.gmail).from;
       for (const invite of invites) {
         try {
           const msg = buildMessage(invite);
@@ -602,7 +599,7 @@ app.post('/api/send-invites', async (req, res) => {
     // ── 3. SMTP fallback (works locally; blocked on Render free tier) ───────────
     const acct = SMTP_ACCOUNTS[fromAccount] || SMTP_ACCOUNTS.gmail;
     if (!acct.user || !acct.pass) {
-      res.status(503).json({ error: 'Email not configured. Set GMAIL_CLIENT_ID + GMAIL_CLIENT_SECRET + GMAIL_REFRESH_TOKEN in Render environment variables.' });
+      res.status(503).json({ error: 'Email not configured. Set BREVO_API_KEY in Render environment variables (free at brevo.com).' });
       return;
     }
     const transporter = nodemailer.createTransport({
