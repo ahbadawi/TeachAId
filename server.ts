@@ -581,25 +581,52 @@ app.get('/api/test-key', async (_req, res) => {
   const key = process.env.GOOGLE_API_KEY || '';
   const keyPreview = key.length > 8 ? `${key.slice(0, 6)}...${key.slice(-4)}` : '(not set)';
   const keyLength = key.length;
-  const looksLikeFirebaseKey = key.startsWith('AIzaSy') && keyLength === 39;
-  // Gemini API keys from AI Studio also start with AIzaSy but are 39 chars — same format as Firebase keys
-  // The only way to tell is to actually call the API
-  let apiTestResult = '';
-  let apiTestError = '';
+
+  // Step 1: Call ListModels — this tells us definitively what the key can access.
+  // A real AI Studio Gemini key will return a list of models.
+  // A Firebase Web API key will return an error or empty list.
+  let listModelsResult: string | null = null;
+  let listModelsError: string | null = null;
   try {
-    const testResult = await gemini('Test').generateContent('Say "API key is working" in 5 words.');
+    const listRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=5`
+    );
+    const listJson = await listRes.json() as any;
+    if (listRes.ok) {
+      const names = (listJson.models || []).map((m: any) => m.name);
+      listModelsResult = names.length ? names.join(', ') : '(no models returned)';
+    } else {
+      listModelsError = `HTTP ${listRes.status}: ${JSON.stringify(listJson).slice(0, 300)}`;
+    }
+  } catch (err: any) {
+    listModelsError = String(err?.message || err).slice(0, 200);
+  }
+
+  // Step 2: Try a live generateContent call with the model we have configured.
+  let apiTestResult: string | null = null;
+  let apiTestError: string | null = null;
+  try {
+    const testResult = await gemini('Test').generateContent('Say "working" in one word.');
     apiTestResult = testResult.response.text().slice(0, 100);
   } catch (err: any) {
     apiTestError = String(err?.message || err).slice(0, 300);
   }
-  res.json({
-    keyPreview,
-    keyLength,
-    looksLikeFirebaseKey,
-    apiTestResult: apiTestResult || null,
-    apiTestError: apiTestError || null,
-    note: 'Both Firebase web keys and Gemini API keys start with AIzaSy and are 39 chars. If apiTestError contains 429, the key is exhausted. If it contains "API_KEY_INVALID", the key is the wrong type (e.g. a Firebase key used here). If apiTestResult has text, the key is correct and working.',
-  });
+
+  // Step 3: Diagnosis
+  let diagnosis = '';
+  if (apiTestResult) {
+    diagnosis = '✅ Key is correct and working.';
+  } else if (listModelsError && (listModelsError.includes('API_KEY_INVALID') || listModelsError.includes('403'))) {
+    diagnosis = '❌ This key does not have access to the Generative Language API. You have set the Firebase Web API key in Render — that key is only for the Firebase SDK. Go to https://aistudio.google.com/apikey and create a Gemini API key, then set THAT key as GOOGLE_API_KEY in Render.';
+  } else if (listModelsResult) {
+    diagnosis = `⚠️ Key can list models (${listModelsResult}) but generateContent is failing. Check model name.`;
+  } else if (apiTestError?.includes('404')) {
+    diagnosis = '❌ Model not found — either the model name is wrong or this key is a Firebase key with no Gemini access. Get a key from https://aistudio.google.com/apikey';
+  } else {
+    diagnosis = `Unknown state — listModelsError: ${listModelsError}, apiTestError: ${apiTestError}`;
+  }
+
+  res.json({ keyPreview, keyLength, listModelsResult, listModelsError, apiTestResult, apiTestError, diagnosis });
 });
 
 // ─── Static frontend (production) ─────────────────────────────────────────────
