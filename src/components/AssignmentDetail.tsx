@@ -142,18 +142,19 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
       ]);
       if (!briefText.trim()) throw new Error('Could not extract text from the brief file. Ensure it is a readable PDF, DOCX, or TXT.');
       setSummaryStep(`Generating summary and ${liveAssignment.questionCount} questions with AI…`);
-      const { summaryText, questions: newQs, rubricText: effectiveRubric } =
+      const { summaryText, questions: newQs, rubricText: effectiveRubric, rubricIsAiGenerated } =
         await generateAssignmentSummary(briefText, rubricText, liveAssignment.questionCount);
 
       // Save summary + rubric to Firestore
       await updateDoc(doc(db, 'assignments', liveAssignment.id), {
         summaryText,
         rubricText: effectiveRubric,
+        rubricIsAiGenerated,
         summaryGeneratedAt: serverTimestamp(),
       });
       setSummary(summaryText);
       setRubric(effectiveRubric);
-      setLiveAssignment(prev => ({ ...prev, summaryText, rubricText: effectiveRubric }));
+      setLiveAssignment(prev => ({ ...prev, summaryText, rubricText: effectiveRubric, rubricIsAiGenerated }));
 
       // Build questions array preserving all new fields (questionType, options, submissionExtract, etc.)
       let questionsArray = newQs.map((q, i) => ({
@@ -179,8 +180,10 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
       }
 
       // Save questions inline on the assignment doc (avoids subcollection permission issues)
-      await updateDoc(doc(db, 'assignments', liveAssignment.id), { questions: questionsArray });
-      setLiveAssignment(prev => ({ ...prev, questions: questionsArray as any }));
+      // questionCount = shared MCQ count + 3 per-student open questions
+      const totalCount = questionsArray.length + 3;
+      await updateDoc(doc(db, 'assignments', liveAssignment.id), { questions: questionsArray, questionCount: totalCount });
+      setLiveAssignment(prev => ({ ...prev, questions: questionsArray as any, questionCount: totalCount }));
     } catch (err: any) {
       setSummaryError(err?.message || 'Failed to generate summary.');
     } finally {
@@ -261,6 +264,11 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
               <input type="number" min="4" max="20" value={questionCount}
                 onChange={e => setQuestionCount(parseInt(e.target.value))}
                 className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
+            ) : liveAssignment.questions?.length ? (
+              <div>
+                <p className="text-sm text-stone-700">{liveAssignment.questions.length + 3} total</p>
+                <p className="text-xs text-stone-400 mt-0.5">{liveAssignment.questions.length} shared MCQ + 3 per student</p>
+              </div>
             ) : (
               <p className="text-sm text-stone-700">{liveAssignment.questionCount}</p>
             )}
@@ -329,8 +337,16 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
             <p className="text-sm text-stone-700 leading-relaxed">{summary}</p>
             {rubric && (
               <div className="border-t border-stone-100 pt-4">
-                <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide mb-2">Grading Rubric</p>
-                <p className="text-sm text-stone-600 leading-relaxed whitespace-pre-wrap">{rubric}</p>
+                <div className="flex items-center gap-2 mb-3">
+                  <p className="text-xs font-semibold text-stone-500 uppercase tracking-wide">Grading Rubric</p>
+                  {liveAssignment.rubricIsAiGenerated === true && (
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-violet-50 text-violet-600 border border-violet-200">AI-Generated</span>
+                  )}
+                  {liveAssignment.rubricIsAiGenerated === false && (
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200">Uploaded by you</span>
+                  )}
+                </div>
+                <RubricDisplay text={rubric} />
               </div>
             )}
           </div>
@@ -346,7 +362,7 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
         <div className="flex border-b border-stone-100">
           <TabButton label="Students" icon={<Users className="w-4 h-4" />} active={tab === 'students'} onClick={() => setTab('students')} />
           <TabButton
-            label={`Generic Questions${questions.length > 0 ? ` (${questions.length})` : ''}`}
+            label={`Shared MCQ${questions.length > 0 ? ` (${questions.length})` : ''}`}
             icon={<FileText className="w-4 h-4" />}
             active={tab === 'questions'}
             onClick={() => setTab('questions')}
@@ -412,6 +428,48 @@ function TabButton({ label, icon, active, onClick }: { label: string; icon: Reac
       {label}
     </button>
   );
+}
+
+// ─── Rubric renderer — markdown table → HTML table, plain text fallback ──────
+function RubricDisplay({ text }: { text: string }) {
+  // Detect markdown table: at least two lines containing '|'
+  const lines = text.split('\n');
+  const tableLines = lines.filter(l => l.includes('|'));
+  if (tableLines.length >= 2) {
+    const parseRow = (line: string) =>
+      line.split('|').slice(1, -1).map(c => c.trim()).filter((_, i, arr) => arr.length > 1);
+    // Filter out separator rows (e.g. |---|---|)
+    const dataLines = tableLines.filter(l => !/^\|[\s\-|:]+\|$/.test(l.replace(/\s/g, '')));
+    if (dataLines.length >= 2) {
+      const [headerLine, ...rowLines] = dataLines;
+      const headers = parseRow(headerLine);
+      const rows = rowLines.map(parseRow).filter(r => r.length > 0);
+      return (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="bg-stone-100">
+                {headers.map((h, i) => (
+                  <th key={i} className="px-3 py-2 text-left font-semibold text-stone-700 border border-stone-200 whitespace-normal">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, ri) => (
+                <tr key={ri} className={ri % 2 === 0 ? 'bg-white' : 'bg-stone-50'}>
+                  {row.map((cell, ci) => (
+                    <td key={ci} className="px-3 py-2 text-stone-600 border border-stone-200 align-top whitespace-normal leading-relaxed">{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+  }
+  // Fallback: plain text
+  return <p className="text-sm text-stone-600 leading-relaxed whitespace-pre-wrap">{text}</p>;
 }
 
 function FileSlot({ label, url, uploading, onFile, optional }: {

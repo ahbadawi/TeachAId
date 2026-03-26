@@ -202,6 +202,7 @@ export default function StudentPortal({ token }: Props) {
   useEffect(() => {
     if (step === 'interview' && videoRef.current && cameraStreamRef.current) {
       videoRef.current.srcObject = cameraStreamRef.current;
+      videoRef.current.play().catch(() => {}); // force play; autoPlay alone can be blocked before user interaction
     }
   }, [step]); // runs right after step becomes 'interview' and DOM updates
 
@@ -648,6 +649,8 @@ export default function StudentPortal({ token }: Props) {
   // ─── Snapshot ─────────────────────────────────────────────────────────────────
   const takeSnapshot = (sessionId: string, qIndex: number, isSubmission: boolean) => {
     if (!videoRef.current || !canvasRef.current) return;
+    // readyState < 2 (HAVE_CURRENT_DATA) means no frame has decoded yet — drawImage would produce black
+    if (videoRef.current.readyState < 2) return;
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) return;
     ctx.drawImage(videoRef.current, 0, 0, 640, 480);

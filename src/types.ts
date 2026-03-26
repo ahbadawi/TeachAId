@@ -51,6 +51,7 @@ export interface Assignment {
   status: 'Draft' | 'Processing' | 'Ready' | 'Active' | 'Closed' | 'Archived';
   summaryText?: string;
   rubricText?: string;     // effective rubric (provided or AI-generated) — stored for re-use at analysis time
+  rubricIsAiGenerated?: boolean; // true = Gemini-generated, false = educator-uploaded, undefined = unknown (legacy)
   summaryGeneratedAt?: string;
   questions?: Question[];  // stored inline on the assignment doc (avoids subcollection permission issues)
 }

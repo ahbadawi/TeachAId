@@ -126,8 +126,9 @@ app.get('/dev-pdf/:name', (req, res) => {
 async function ensureRubric(briefText: string, rubricText?: string): Promise<string> {
   if (rubricText?.trim()) return rubricText;
   const result = await gemini('Academic grading rubric writer.').generateContent(
-    `Create a concise grading rubric (4–6 criteria, each 0–100 points) for this assignment:\n\n${briefText}\n\n` +
-    'Return plain text only — no JSON, no markdown headers. Format: "Criterion: weight% — description"'
+    `Create a concise grading rubric for this assignment with 4–6 criteria.\n\n${briefText}\n\n` +
+    'Return a Markdown table ONLY — no JSON, no prose. Columns: | Criterion | Excellent (90–100%) | Proficient (75–89%) | Developing (60–74%) | Needs Improvement (<60%) |\n' +
+    'Each row is one criterion. Include a weight in the Criterion cell (e.g. "Code Quality (30 pts)").'
   );
   return result.response.text().trim();
 }
@@ -417,7 +418,7 @@ app.post('/api/generate-assignment-summary', async (req, res) => {
     const mcqResult = await gemini('Academic integrity interviewer.').generateContent(mcqPrompt);
     const mcqQuestions = JSON.parse(parseJsonResponse(mcqResult.response.text()));
 
-    res.json({ summaryText, questions: mcqQuestions, rubricText: effectiveRubric });
+    res.json({ summaryText, questions: mcqQuestions, rubricText: effectiveRubric, rubricIsAiGenerated: !rubricText?.trim() });
   } catch (err: any) {
     console.error('/api/generate-assignment-summary error:', err);
     res.status(500).json({ error: 'Summary generation failed.', detail: String(err?.message || err) });

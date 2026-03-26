@@ -156,7 +156,7 @@ export async function extractTextFromUrl(url: string): Promise<string> {
 // ─── Generate assignment summary + generic questions ─────────────────────────
 export async function generateAssignmentSummary(
   briefText: string, rubricText: string, questionCount: number
-): Promise<{ summaryText: string; questions: GeneratedQuestion[]; rubricText: string }> {
+): Promise<{ summaryText: string; questions: GeneratedQuestion[]; rubricText: string; rubricIsAiGenerated: boolean }> {
   const res = await fetch(`${API_BASE}/generate-assignment-summary`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -168,7 +168,7 @@ export async function generateAssignmentSummary(
       (errData as any).detail || (errData as any).error || `Summary generation failed (${res.status})`
     );
   }
-  return res.json() as Promise<{ summaryText: string; questions: GeneratedQuestion[]; rubricText: string }>;
+  return res.json() as Promise<{ summaryText: string; questions: GeneratedQuestion[]; rubricText: string; rubricIsAiGenerated: boolean }>;
 }
 
 // ─── Generate per-student questions from their submission ─────────────────────
