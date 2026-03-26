@@ -55,6 +55,7 @@ export default function StudentPortal({ token }: Props) {
   const micAnimRef = useRef<number | null>(null);
   const recAnalyserRef = useRef<AnalyserNode | null>(null);
   const recAnimRef = useRef<number | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null); // holds stream until video element mounts
   const [micAmplitude, setMicAmplitude] = useState(0);
 
   // ─── Detect test mode from URL ───────────────────────────────────────────────
@@ -197,6 +198,13 @@ export default function StudentPortal({ token }: Props) {
     };
   }, [step]);
 
+  // ─── Connect camera stream once the PiP <video> element mounts ───────────────
+  useEffect(() => {
+    if (step === 'interview' && videoRef.current && cameraStreamRef.current) {
+      videoRef.current.srcObject = cameraStreamRef.current;
+    }
+  }, [step]); // runs right after step becomes 'interview' and DOM updates
+
   // ─── Auto-play question when index changes ────────────────────────────────────
   useEffect(() => {
     if (step === 'interview' && questions.length > 0) {
@@ -327,10 +335,11 @@ export default function StudentPortal({ token }: Props) {
 
     await logAudit('Interview Started', `Student ${student.name} started interview for ${assignment.title}`, student.id, { isTestMode });
 
-    // Start camera for snapshots
+    // Start camera — store stream in ref; the video element only mounts after setStep('interview')
+    // so we apply srcObject in a useEffect once the DOM element is available.
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      if (videoRef.current) videoRef.current.srcObject = stream;
+      cameraStreamRef.current = stream;
 
       // Periodic snapshot every 60 seconds
       snapshotTimerRef.current = setInterval(() => {
@@ -584,9 +593,8 @@ export default function StudentPortal({ token }: Props) {
     if (!session) return;
     if (snapshotTimerRef.current) clearInterval(snapshotTimerRef.current);
     // Release camera
-    if (videoRef.current?.srcObject) {
-      (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
-    }
+    cameraStreamRef.current?.getTracks().forEach(t => t.stop());
+    cameraStreamRef.current = null;
     await updateDoc(doc(db, 'interviewSessions', session.id), {
       status: 'AWAITING_PROCESSING',
       completedAt: serverTimestamp(),
