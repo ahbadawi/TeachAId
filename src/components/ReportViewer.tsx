@@ -147,17 +147,25 @@ export default function ReportViewer({ sessionId, onClose, onPrevStudent, onNext
         } catch { /* chunk may not have audio */ }
       }
 
-      // Load questions — prefer inline array on assignment doc, fall back to subcollection
+      // Load all 6 questions with correct response indices:
+      //   Open questions (per-student) → indices 0–2, stored on session.openQuestions
+      //   MCQ questions (assignment-level) → indices 3–5, stored on assignment.questions
+      // The open questions are stored on the session doc (set during startInterview()).
+      // MCQ questions in the assignment doc have order 0–2 but were presented at index 3–5.
       let questions: { index: number; textEn: string }[] = [];
+      const openQs = (session.openQuestions || [])
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+        .map(q => ({ index: q.order ?? 0, textEn: q.textEn || '' }));
+
       const inlineQs = assignment.questions || [];
-      if (inlineQs.length > 0) {
-        questions = [...inlineQs]
-          .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-          .map((q, i) => ({ index: i, textEn: q.textEn || '' }));
-      } else {
-        const qDocs = await getDocs(query(collection(db, 'assignments', assignment.id, 'questions'), orderBy('order')));
-        questions = qDocs.docs.map((d, i) => ({ index: i, textEn: (d.data().textEn as string) || '' }));
-      }
+      const mcqQs = inlineQs.length > 0
+        ? [...inlineQs]
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+            .map((q, i) => ({ index: 3 + i, textEn: q.textEn || '' }))
+        : await getDocs(query(collection(db, 'assignments', assignment.id, 'questions'), orderBy('order')))
+            .then(snap => snap.docs.map((d, i) => ({ index: 3 + i, textEn: (d.data().textEn as string) || '' })));
+
+      questions = [...openQs, ...mcqQs];
 
       // Use stored rubric text if available; fall back to empty string (server will
       // regenerate a rubric from the brief if needed via ensureRubric())
@@ -377,7 +385,10 @@ export default function ReportViewer({ sessionId, onClose, onPrevStudent, onNext
                   onClick={() => { const ci = chunks.indexOf(chunk); setCurrentChunkIndex(ci); setIsPlaying(true); }}>
                   <div className="flex items-center gap-2 mb-1">
                     <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">
-                      Q{chunk.questionIndex + 1}{chunk.isBranch ? ' (follow-up)' : ''}
+                      Q{chunk.questionIndex + 1}{chunk.isBranch ? ' (follow-up)' : ''}{' '}
+                      <span className={cn("ml-1", chunk.questionIndex < 3 ? "text-amber-500" : "text-blue-400")}>
+                        {chunk.questionIndex < 3 ? 'Open' : 'MCQ'}
+                      </span>
                     </p>
                     <span className="text-stone-200">·</span>
                     <p className="text-[10px] text-stone-400">{formatDuration(chunk.duration)}</p>
@@ -385,6 +396,11 @@ export default function ReportViewer({ sessionId, onClose, onPrevStudent, onNext
                       <span className="text-[10px] text-stone-300 uppercase">{chunk.transcriptLanguage}</span>
                     )}
                   </div>
+                  {chunk.selectedOption && (
+                    <p className="text-xs font-bold text-blue-600 mb-1">
+                      Selected: Option {chunk.selectedOption.toUpperCase()}
+                    </p>
+                  )}
                   {chunk.transcriptText
                     ? <p className="text-sm text-stone-700 leading-relaxed">{chunk.transcriptText}</p>
                     : <p className="text-xs text-stone-400 italic">Audio recorded — process session to transcribe</p>
