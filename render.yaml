@@ -10,14 +10,22 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: GOOGLE_API_KEY
-        sync: false          # set manually in Render dashboard
       - key: APP_URL
         fromService:
           type: web
           name: teachaid
           property: host
-      # WHISPER_URL and KOKORO_URL intentionally omitted —
-      # those run locally on educator's machine, not on Render.
-      # Without them: TTS falls back to browser Web Speech API (fine).
-      # Process Session button requires educator to run local server + Whisper.
+      # ── Required secrets — set manually in Render dashboard ────────────────
+      - key: GOOGLE_API_KEY
+        sync: false   # Gemini API key — question generation + transcription + analysis
+      - key: GOOGLE_TTS_KEY
+        sync: false   # Google Cloud TTS API key — Neural2 audio synthesis (en-US-Neural2-J / ar-XA-Neural2-D)
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false   # Full service-account JSON (single line) — Firebase Admin (Storage + Firestore) used by /api/pregen-audio and /api/process-session
+      - key: FIREBASE_STORAGE_BUCKET
+        sync: false   # e.g. ai-studio-applet-webapp-3bc9d.firebasestorage.app  (defaults to this value if omitted)
+      # ── Optional — at least one email service key enables invite emails ────
+      - key: BREVO_API_KEY
+        sync: false   # Brevo (formerly Sendinblue) — free 300/day; recommended
+      - key: SENDGRID_API_KEY
+        sync: false   # SendGrid alternative
