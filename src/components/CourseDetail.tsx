@@ -238,7 +238,7 @@ export default function CourseDetail({ course, assignments, isDev, onBack, onSel
                   <BookOpen className="w-4 h-4 text-stone-300" />
                   <div>
                     <p className="text-sm font-medium text-stone-800">{a.title}</p>
-                    <p className="text-xs text-stone-400">{a.questionCount} questions · {a.questionMode}</p>
+                    <p className="text-xs text-stone-400">{a.questions?.length ? `${a.questions.length + 3} questions` : `${a.questionCount} questions`} · {a.questionMode}</p>
                   </div>
                 </div>
                 <span className={cn('px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md',

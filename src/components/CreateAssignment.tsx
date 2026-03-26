@@ -23,7 +23,7 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
   const [courseId, setCourseId] = useState(courses[0]?.id || '');
   const [briefFile, setBriefFile] = useState<File | null>(null);
   const [rubricFile, setRubricFile] = useState<File | null>(null);
-  const [questionCount, setQuestionCount] = useState(12);
+  const [questionCount] = useState(6); // fixed: 3 shared MCQ + 3 per-student open = 6 total
   const [responseTimeLimit, setResponseTimeLimit] = useState(90);
   const [questionMode, setQuestionMode] = useState<QuestionMode>('AI-Generated');
   const [captureMode, setCaptureMode] = useState<'Snapshot' | 'Video'>('Snapshot');
@@ -249,12 +249,14 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
             {/* Question count */}
             <div className="grid grid-cols-2 gap-6">
               <div>
-                <label className="block text-sm font-medium text-stone-700 mb-1">
-                  Number of Questions: <span className="text-emerald-600 font-bold">{questionCount}</span>
-                </label>
-                <input type="range" min="8" max="16" value={questionCount} onChange={e => setQuestionCount(parseInt(e.target.value))}
-                  className="w-full accent-emerald-600" />
-                <div className="flex justify-between text-xs text-stone-400 mt-1"><span>8</span><span>16</span></div>
+                <label className="block text-sm font-medium text-stone-700 mb-1">Interview Structure</label>
+                <div className="flex items-center gap-3 py-2">
+                  <span className="text-2xl font-bold text-emerald-600">6</span>
+                  <div className="text-xs text-stone-500 leading-snug">
+                    <p><span className="font-semibold text-amber-600">3 open</span> — generated from each student's own submission</p>
+                    <p><span className="font-semibold text-blue-600">3 MCQ</span> — shared across all students, from the brief</p>
+                  </div>
+                </div>
               </div>
 
               <div>
@@ -298,7 +300,7 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
               <div className="bg-stone-50 p-4 rounded-2xl flex gap-3">
                 <Info className="w-5 h-5 text-stone-400 shrink-0" />
                 <p className="text-xs text-stone-600 leading-relaxed">
-                  TeachAId will generate {questionCount} interview questions from the brief{rubricFile ? ' and rubric' : ' — a rubric will be auto-generated if none is uploaded'}. Students upload their own work during the interview.
+                  TeachAId will generate 3 shared MCQ questions from the brief{rubricFile ? ' and rubric' : ' — a rubric will be auto-generated if none is uploaded'}. When each student starts their interview, 3 additional open questions are generated from their own submission. 6 questions total per student.
                 </p>
               </div>
             )}

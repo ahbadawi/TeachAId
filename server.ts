@@ -71,9 +71,9 @@ app.post('/api/tts', async (req, res) => {
     input: { text },
     voice: {
       languageCode: isAr ? 'ar-XA' : 'en-US',
-      name:         isAr ? 'ar-XA-Neural2-B' : 'en-US-Neural2-J',
+      name:         isAr ? 'ar-XA-Neural2-D' : 'en-US-Neural2-J',
     },
-    audioConfig: { audioEncoding: 'MP3', speakingRate: isAr ? 0.8 : 0.9 },
+    audioConfig: { audioEncoding: 'MP3', speakingRate: isAr ? 0.95 : 0.9 },
   };
 
   try {
@@ -429,7 +429,7 @@ app.post('/api/generate-assignment-summary', async (req, res) => {
       `- 4 plausible options (a, b, c, d) — exactly one correct\n` +
       `- Questions test conceptual understanding, NOT factual recall\n` +
       `- All text in both English and Arabic\n` +
-      `- Arabic text must be concise, clear Modern Standard Arabic suitable for spoken TTS — use short sentences, avoid complex grammatical structures\n\n` +
+      `- Arabic text: write as a professor speaking directly to a student — short sentences (max 12 words), plain everyday vocabulary, no formal connectors (avoid إن/حيث/إذ), use direct questions like "ما رأيك في..." or "كيف تفسر..."\n\n` +
       `Return a JSON array of exactly 3 objects. Each object:\n` +
       `{ "questionType": "mcq", "textEn": "...", "textAr": "...", "options": { "a": "...", "b": "...", "c": "...", "d": "...", "aAr": "...", "bAr": "...", "cAr": "...", "dAr": "..." }, "correctOption": "a"|"b"|"c"|"d", "order": 0|1|2 }\n` +
       `Return JSON array ONLY — no markdown, no explanation.`;
@@ -469,7 +469,7 @@ app.post('/api/generate-student-questions', async (req, res) => {
       `- Do NOT ask factual recall questions\n` +
       `- Set "submissionExtract" to the verbatim passage (in the original language)\n` +
       `- All question text in both English and Arabic\n` +
-      `- Arabic text must be concise, clear Modern Standard Arabic suitable for spoken TTS — use short sentences, avoid complex grammatical structures\n\n` +
+      `- Arabic text: write as a professor speaking directly to a student — short sentences (max 12 words), plain everyday vocabulary, no formal connectors (avoid إن/حيث/إذ), use direct questions like "ما رأيك في..." or "كيف تفسر..."\n\n` +
       `Return a JSON array of exactly 3 objects. Each object:\n` +
       `{ "questionType": "open", "textEn": "...", "textAr": "...", "submissionExtract": "...", "followUpEn": "...", "followUpAr": "...", "order": 0|1|2 }\n` +
       `Return JSON array ONLY — no markdown, no explanation.`;
@@ -501,7 +501,15 @@ app.post('/api/pregen-audio', async (req, res) => {
     const { initializeApp, getApps, cert } = await import('firebase-admin/app');
     const { getStorage } = await import('firebase-admin/storage');
     if (!getApps().length) {
-      initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}')),
+      // Parse service account — handles plain JSON, JSON wrapped in quotes, or base64-encoded JSON
+      const raw = (process.env.FIREBASE_SERVICE_ACCOUNT || '').trim().replace(/^['"`]|['"`]$/g, '');
+      let sa: object = {};
+      try { sa = JSON.parse(raw); } catch {
+        try { sa = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')); } catch {
+          console.error('[pregen-audio] FIREBASE_SERVICE_ACCOUNT is not valid JSON or base64-JSON — Storage uploads will fail');
+        }
+      }
+      initializeApp({ credential: cert(sa as any),
         storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'ai-studio-applet-webapp-3bc9d.firebasestorage.app' });
     }
     const bucket = getStorage().bucket();
@@ -510,8 +518,8 @@ app.post('/api/pregen-audio', async (req, res) => {
       const isAr = lang === 'ar';
       const payload = {
         input: { text },
-        voice: { languageCode: isAr ? 'ar-XA' : 'en-US', name: isAr ? 'ar-XA-Neural2-B' : 'en-US-Neural2-J' },
-        audioConfig: { audioEncoding: 'MP3', speakingRate: isAr ? 0.8 : 0.9 },
+        voice: { languageCode: isAr ? 'ar-XA' : 'en-US', name: isAr ? 'ar-XA-Neural2-D' : 'en-US-Neural2-J' },
+        audioConfig: { audioEncoding: 'MP3', speakingRate: isAr ? 0.95 : 0.9 },
       };
       const r = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${ttsKey}`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });

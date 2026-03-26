@@ -363,12 +363,16 @@ export default function StudentPortal({ token }: Props) {
         }),
       });
       const { questions: rawOpenQs } = await qRes.json();
+      if (!Array.isArray(rawOpenQs) || rawOpenQs.length === 0) throw new Error('No open questions returned');
 
-      // Pre-generate audio — stored at sessions/{sessionId}/audio/q{n}_{en|ar}.mp3
-      const openQsWithAudio = await pregenAudioFn(
-        rawOpenQs,
-        `sessions/${sessionRef.id}/audio`
-      );
+      // Pre-generate audio — non-fatal: if Firebase Storage is unavailable, questions still load
+      // and the interview falls back to browser TTS (speakText already has Web Speech API fallback)
+      let openQsWithAudio: Question[] = rawOpenQs;
+      try {
+        openQsWithAudio = await pregenAudioFn(rawOpenQs, `sessions/${sessionRef.id}/audio`);
+      } catch (audioErr) {
+        console.warn('[startInterview] Audio pre-gen failed — interview will use browser TTS:', audioErr);
+      }
 
       // Assign orders 0–2 and persist on the session doc
       const openWithOrders = openQsWithAudio.map((q: Question, i: number) => ({ ...q, order: i }));
@@ -757,7 +761,7 @@ export default function StudentPortal({ token }: Props) {
               <div className="prose prose-stone mb-6 text-sm text-stone-600 space-y-3">
                 <p>This interview helps verify your understanding of the work you've submitted. Here's what to expect:</p>
                 <ul className="list-disc pl-5 space-y-1">
-                  <li>You will be asked {assignment?.questionCount || 12} questions about your submission.</li>
+                  <li>You will be asked 6 questions: 3 based on your own submission, and 3 multiple-choice questions.</li>
                   <li>Questions will be read aloud in English{arabicEnabled ? ' and Arabic' : ''}.</li>
                   <li>Your spoken responses will be recorded.</li>
                   <li>
