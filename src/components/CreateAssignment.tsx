@@ -93,15 +93,30 @@ export default function CreateAssignment({ courses, onClose, educatorId }: Props
           const { summaryText, questions: generatedQuestions, rubricText: effectiveRubric } =
             await generateAssignmentSummary(briefText, rubricText, questionCount);
 
-          // Persist summary, questions (inline array — no subcollection), and mark ready.
-          // Storing questions inline avoids subcollection permission issues and simplifies reads.
-          const questionsArray = generatedQuestions.map((q, i) => ({
-            textEn: q.textEn,
-            textAr: q.textAr,
-            followUpEn: q.followUpEn || null,
-            followUpAr: q.followUpAr || null,
+          // Build questions preserving all new fields (questionType, options, submissionExtract, etc.)
+          let questionsArray = generatedQuestions.map((q, i) => ({
+            questionType: (q.questionType || 'mcq') as 'open' | 'mcq',
+            textEn: q.textEn, textAr: q.textAr,
+            followUpEn: q.followUpEn || null, followUpAr: q.followUpAr || null,
+            submissionExtract: q.submissionExtract || null,
+            options: q.options || null,
+            correctOption: q.correctOption || null,
+            audioUrlEn: null as string | null,
+            audioUrlAr: null as string | null,
             order: i,
           }));
+
+          // Pre-generate TTS audio
+          try {
+            setProcessingStep('Generating audio for questions…');
+            const { pregenAudio } = await import('../lib/claude');
+            const withAudio = await pregenAudio(questionsArray as any, `assignments/${assignmentRef.id}/audio`);
+            questionsArray = withAudio.map((q, i) => ({ ...questionsArray[i], ...q })) as typeof questionsArray;
+          } catch (audioErr) {
+            console.warn('[CreateAssignment] Audio pre-gen failed (questions saved without audio):', audioErr);
+          }
+
+          // Persist summary, questions (inline array — no subcollection), and mark active.
           await updateDoc(doc(db, 'assignments', assignmentRef.id), {
             status: 'Active',
             summaryText,

@@ -7,8 +7,14 @@ export interface GeneratedQuestion {
   textEn: string;
   textAr: string;
   order: number;
-  followUpEn?: string;
-  followUpAr?: string;
+  followUpEn?: string | null;
+  followUpAr?: string | null;
+  questionType?: 'open' | 'mcq';
+  submissionExtract?: string;
+  options?: { a: string; b: string; c: string; d: string; aAr?: string; bAr?: string; cAr?: string; dAr?: string };
+  correctOption?: 'a' | 'b' | 'c' | 'd';
+  audioUrlEn?: string;
+  audioUrlAr?: string;
 }
 
 export interface SessionAnalysis {
@@ -154,6 +160,24 @@ export async function generateStudentQuestions(
     body: JSON.stringify({ submissionText, briefText, rubricText, genericQuestions, courseOutline, count }),
   });
   if (!res.ok) throw new Error('Student question generation failed');
+  const data = await res.json();
+  return (data as any).questions as GeneratedQuestion[];
+}
+
+// ─── Pre-generate TTS audio for all questions ────────────────────────────────
+export async function pregenAudio(
+  questions: GeneratedQuestion[],
+  storagePath: string
+): Promise<GeneratedQuestion[]> {
+  const res = await fetch(`${API_BASE}/pregen-audio`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ questions, storagePath }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || 'Audio pre-generation failed');
+  }
   const data = await res.json();
   return (data as any).questions as GeneratedQuestion[];
 }

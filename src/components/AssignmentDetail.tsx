@@ -155,14 +155,32 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
       setRubric(effectiveRubric);
       setLiveAssignment(prev => ({ ...prev, summaryText, rubricText: effectiveRubric }));
 
-      // Save questions inline on the assignment doc (avoids subcollection permission issues)
-      const questionsArray = newQs.map((q, i) => ({
+      // Build questions array preserving all new fields (questionType, options, submissionExtract, etc.)
+      let questionsArray = newQs.map((q, i) => ({
+        questionType: (q.questionType || 'mcq') as 'open' | 'mcq',
         textEn: q.textEn, textAr: q.textAr,
         followUpEn: q.followUpEn || null, followUpAr: q.followUpAr || null,
+        submissionExtract: q.submissionExtract || null,
+        options: q.options || null,
+        correctOption: q.correctOption || null,
+        audioUrlEn: q.audioUrlEn || null,
+        audioUrlAr: q.audioUrlAr || null,
         order: i,
       }));
+
+      // Pre-generate TTS audio and store URLs
+      try {
+        setSummaryStep('Generating audio for questions (1M chars/month free)…');
+        const { pregenAudio } = await import('../lib/claude');
+        const withAudio = await pregenAudio(questionsArray as any, `assignments/${liveAssignment.id}/audio`);
+        questionsArray = withAudio.map((q, i) => ({ ...questionsArray[i], ...q })) as typeof questionsArray;
+      } catch (audioErr) {
+        console.warn('[AssignmentDetail] Audio pre-gen failed (questions saved without audio):', audioErr);
+      }
+
+      // Save questions inline on the assignment doc (avoids subcollection permission issues)
       await updateDoc(doc(db, 'assignments', liveAssignment.id), { questions: questionsArray });
-      setLiveAssignment(prev => ({ ...prev, questions: questionsArray }));
+      setLiveAssignment(prev => ({ ...prev, questions: questionsArray as any }));
     } catch (err: any) {
       setSummaryError(err?.message || 'Failed to generate summary.');
     } finally {

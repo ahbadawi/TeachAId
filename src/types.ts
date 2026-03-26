@@ -127,15 +127,27 @@ export interface InterviewSession {
   isTestMode?: boolean;
 }
 
+export interface MCQOptions {
+  a: string; b: string; c: string; d: string;
+  aAr?: string; bAr?: string; cAr?: string; dAr?: string;
+}
+
 export interface Question {
   id?: string;
+  order: number;
+  questionType?: 'open' | 'mcq';   // 'open' if omitted (backwards compat)
   textEn: string;
   textAr: string;
+  followUpEn?: string | null;
+  followUpAr?: string | null;
+  // Open questions — excerpt from student's submission shown on screen
+  submissionExtract?: string;
+  // MCQ questions — options + correct answer
+  options?: MCQOptions;
+  correctOption?: 'a' | 'b' | 'c' | 'd';
+  // Pre-generated audio stored in Firebase Storage
   audioUrlEn?: string;
   audioUrlAr?: string;
-  followUpEn?: string;
-  followUpAr?: string;
-  order: number;
 }
 
 export interface ResponseChunk {
@@ -150,6 +162,7 @@ export interface ResponseChunk {
   transcriptText?: string;
   transcriptLanguage?: string;
   transcriptConfidence?: number;
+  selectedOption?: 'a' | 'b' | 'c' | 'd'; // MCQ answer
 }
 
 export interface Snapshot {

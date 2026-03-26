@@ -27,7 +27,9 @@ export default function StudentPortal({ token }: Props) {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [isBranchQuestion, setIsBranchQuestion] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(600);
+  const [timeLeft, setTimeLeft] = useState(480); // 8 minutes for 6-question interview
+  const [selectedOption, setSelectedOption] = useState<'a' | 'b' | 'c' | 'd' | null>(null);
+  const [recordingAmplitude, setRecordingAmplitude] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [arabicEnabled, setArabicEnabled] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -51,6 +53,8 @@ export default function StudentPortal({ token }: Props) {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micAnimRef = useRef<number | null>(null);
+  const recAnalyserRef = useRef<AnalyserNode | null>(null);
+  const recAnimRef = useRef<number | null>(null);
   const [micAmplitude, setMicAmplitude] = useState(0);
 
   // ─── Detect test mode from URL ───────────────────────────────────────────────
@@ -124,7 +128,7 @@ export default function StudentPortal({ token }: Props) {
 
         setAssignment(assignmentData);
         setStudent({ id: studentDoc.id, ...studentDoc.data() } as Student);
-        setTimeLeft(isTestMode ? 30 : 600);
+        setTimeLeft(isTestMode ? 30 : 480); // 8 minutes for 6-question interview
 
         // Load questions — prefer inline array on assignment doc (no subcollection permission needed),
         // fall back to subcollection for backwards compatibility with older assignments.
@@ -343,20 +347,39 @@ export default function StudentPortal({ token }: Props) {
     setStep('interview');
   };
 
-  // ─── Question playback (Web Speech API) ──────────────────────────────────────
+  // ─── Question playback — uses pre-generated audio URLs when available ────────
+  const playAudioUrl = (url: string): Promise<void> =>
+    new Promise((resolve) => {
+      const audio = new Audio(url);
+      audio.onended = () => resolve();
+      audio.onerror = () => resolve(); // failure → continue
+      audio.play().catch(() => resolve());
+    });
+
   const playQuestion = async (index: number, isBranch = false) => {
     setQuestionPhase('playing');
+    setSelectedOption(null); // reset MCQ selection for new question
     cancelSpeech();
 
     const q = questions[index];
-    const text = isBranch ? (q.followUpEn || q.textEn) : q.textEn;
-    const textAr = isBranch ? (q.followUpAr || q.textAr) : q.textAr;
 
     try {
-      await speakText(text, 'en');
-      if (arabicEnabled) {
-        await new Promise(r => setTimeout(r, 2000)); // 2s gap
-        await speakText(textAr, 'ar');
+      if (!isBranch && q.audioUrlEn) {
+        // Use pre-generated high-quality audio
+        await playAudioUrl(q.audioUrlEn);
+        if (arabicEnabled && q.audioUrlAr) {
+          await new Promise(r => setTimeout(r, 1000));
+          await playAudioUrl(q.audioUrlAr);
+        }
+      } else {
+        // Fall back to live TTS (branch questions or missing pre-gen audio)
+        const text = isBranch ? (q.followUpEn || q.textEn) : q.textEn;
+        const textAr = isBranch ? (q.followUpAr || q.textAr) : q.textAr;
+        await speakText(text, 'en');
+        if (arabicEnabled) {
+          await new Promise(r => setTimeout(r, 2000));
+          await speakText(textAr, 'ar');
+        }
       }
     } catch {
       // TTS failure — continue anyway
@@ -389,11 +412,30 @@ export default function StudentPortal({ token }: Props) {
       audioChunksRef.current = [];
       setRecordingStartTime(Date.now());
 
+      // Real-time audio level meter
+      const audioCtx = new AudioContext();
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      recAnalyserRef.current = analyser;
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      const poll = () => {
+        analyser.getByteFrequencyData(data);
+        const avg = data.reduce((a, b) => a + b, 0) / data.length;
+        setRecordingAmplitude(avg);
+        recAnimRef.current = requestAnimationFrame(poll);
+      };
+      recAnimRef.current = requestAnimationFrame(poll);
+
       mediaRecorder.ondataavailable = e => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
 
       mediaRecorder.onstop = async () => {
+        // Stop amplitude polling
+        if (recAnimRef.current) cancelAnimationFrame(recAnimRef.current);
+        setRecordingAmplitude(0);
         stream.getTracks().forEach(t => t.stop());
         const duration = (Date.now() - recordingStartTime) / 1000;
         const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
@@ -432,6 +474,7 @@ export default function StudentPortal({ token }: Props) {
         timestamp: serverTimestamp(),
         duration,
         uploadConfirmedAt: serverTimestamp(),
+        ...(selectedOption ? { selectedOption } : {}),
       });
 
       // Snapshot at submission moment
@@ -460,8 +503,11 @@ export default function StudentPortal({ token }: Props) {
   // ─── Advance question or branch ───────────────────────────────────────────────
   const advanceAfterResponse = (duration: number) => {
     const MIN_DURATION = isTestMode ? 2 : 15;
+    const currentQ = questions[currentQuestionIndex];
+    const isMcq = currentQ?.questionType === 'mcq';
 
-    if (!isBranchQuestion && duration < MIN_DURATION && questions[currentQuestionIndex]?.followUpEn) {
+    // Branch logic skipped for MCQ questions (they always advance after one answer)
+    if (!isMcq && !isBranchQuestion && duration < MIN_DURATION && currentQ?.followUpEn) {
       // Serve branch question
       setIsBranchQuestion(true);
       playQuestion(currentQuestionIndex, true);
@@ -604,8 +650,7 @@ export default function StudentPortal({ token }: Props) {
         <p className="text-sm text-stone-500 font-medium truncate">{assignment?.title}</p>
       </header>
 
-      {/* Hidden capture elements */}
-      <video ref={videoRef} autoPlay muted playsInline className="hidden" />
+      {/* Hidden canvas for snapshot capture — video is shown as PiP inside the interview card */}
       <canvas ref={canvasRef} width="640" height="480" className="hidden" />
 
       <main className="flex-1 flex items-center justify-center p-4">
@@ -802,100 +847,152 @@ export default function StudentPortal({ token }: Props) {
           )}
 
           {/* ── Interview ────────────────────────────────────────────────────── */}
-          {step === 'interview' && (
-            <div className="max-w-4xl w-full h-[600px] bg-white rounded-[40px] shadow-2xl flex flex-col overflow-hidden border border-stone-100">
-              <div className="p-8 border-b border-stone-100 flex justify-between items-center">
-                <div className="flex items-center gap-4">
-                  <span className="px-4 py-1.5 bg-stone-100 text-stone-600 text-xs font-bold rounded-full uppercase tracking-wider">
-                    Question {currentQuestionIndex + 1} of {questions.length}
-                    {isBranchQuestion && ' (follow-up)'}
+          {step === 'interview' && (() => {
+            const currentQ = questions[currentQuestionIndex];
+            const isMcq = currentQ?.questionType === 'mcq';
+            return (
+            <div className="max-w-3xl w-full bg-white rounded-[40px] shadow-2xl flex flex-col overflow-hidden border border-stone-100">
+              {/* Header */}
+              <div className="px-8 py-5 border-b border-stone-100 flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <span className="px-3 py-1 bg-stone-100 text-stone-600 text-xs font-bold rounded-full uppercase tracking-wider">
+                    Q {currentQuestionIndex + 1}/{questions.length}
+                    {isBranchQuestion && ' ↩'}
                   </span>
-                  <div className="flex items-center gap-2 text-red-500 font-mono text-sm">
+                  {isMcq && <span className="px-3 py-1 bg-blue-50 text-blue-600 text-xs font-bold rounded-full uppercase tracking-wider">MCQ</span>}
+                  <div className="flex items-center gap-1.5 text-red-500 font-mono text-sm">
                     <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-                    {formatDuration(timeLeft)} remaining
+                    {formatDuration(timeLeft)}
                   </div>
                 </div>
-                <button
-                  onClick={() => setShowEndConfirm(true)}
-                  className="text-stone-400 hover:text-red-500 text-sm font-medium transition-colors"
-                >
-                  End Session
-                </button>
+                {/* Live camera preview */}
+                <div className="flex items-center gap-3">
+                  <div className="relative w-24 h-16 rounded-xl overflow-hidden bg-stone-900 border border-stone-200">
+                    <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
+                    <div className="absolute bottom-1 right-1">
+                      <Camera className="w-3 h-3 text-white opacity-60" />
+                    </div>
+                  </div>
+                  <button onClick={() => setShowEndConfirm(true)} className="text-stone-400 hover:text-red-500 text-xs font-medium transition-colors">
+                    End
+                  </button>
+                </div>
               </div>
 
-              <div className="flex-1 flex flex-col items-center justify-center p-12 text-center relative">
-                {/* 3-second countdown overlay */}
+              {/* Main content */}
+              <div className="flex-1 flex flex-col items-center px-8 py-6 relative overflow-y-auto">
+                {/* Countdown overlay */}
                 {questionPhase === 'countdown' && countdown > 0 && (
                   <motion.div
                     initial={{ scale: 0.5, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
-                    className="absolute inset-0 flex items-center justify-center z-10 bg-white/80 backdrop-blur-sm"
+                    className="absolute inset-0 flex items-center justify-center z-10 bg-white/90 backdrop-blur-sm rounded-b-[40px]"
                   >
                     <span className="text-9xl font-serif font-bold text-emerald-600">{countdown}</span>
                   </motion.div>
                 )}
 
-                <div className={cn(
-                  "w-32 h-32 rounded-full flex items-center justify-center mb-8 border transition-all duration-500",
-                  questionPhase === 'recording' ? "bg-red-50 border-red-200" :
-                  questionPhase === 'playing' ? "bg-emerald-50 border-emerald-200" :
-                  "bg-stone-50 border-stone-100"
-                )}>
-                  {questionPhase === 'recording' ? (
-                    <div className="w-6 h-6 bg-red-500 rounded-sm animate-pulse" />
-                  ) : questionPhase === 'uploading' ? (
-                    <Loader2 className="w-10 h-10 text-stone-400 animate-spin" />
-                  ) : (
-                    <Mic className="w-12 h-12 text-stone-300" />
-                  )}
+                {/* Status row */}
+                <div className="flex items-center gap-3 mb-5 w-full justify-center">
+                  <div className={cn(
+                    "w-10 h-10 rounded-full flex items-center justify-center border transition-all duration-300",
+                    questionPhase === 'recording' ? "bg-red-50 border-red-200" :
+                    questionPhase === 'playing' ? "bg-emerald-50 border-emerald-200" :
+                    "bg-stone-50 border-stone-200"
+                  )}>
+                    {questionPhase === 'recording' ? <div className="w-3 h-3 bg-red-500 rounded-sm animate-pulse" /> :
+                     questionPhase === 'uploading' ? <Loader2 className="w-4 h-4 text-stone-400 animate-spin" /> :
+                     <Mic className="w-4 h-4 text-stone-300" />}
+                  </div>
+                  <p className="text-sm font-medium text-stone-600">
+                    {questionPhase === 'playing' ? 'Listening to question…' :
+                     questionPhase === 'countdown' ? 'Get ready to answer…' :
+                     questionPhase === 'recording' ? 'Recording — speak your answer' :
+                     'Saving…'}
+                  </p>
                 </div>
 
-                <h3 className="text-2xl font-serif font-medium text-stone-900 mb-2">
-                  {questionPhase === 'playing' ? 'Listening to question…' :
-                   questionPhase === 'countdown' ? 'Get ready…' :
-                   questionPhase === 'recording' ? 'Recording…' :
-                   'Saving answer…'}
-                </h3>
-                <p className="text-sm text-stone-400">
-                  {questionPhase === 'recording' ? 'Speak your answer, then click Done' :
-                   questionPhase === 'uploading' ? 'Please wait…' : ''}
-                </p>
-
-                {/* Waveform */}
-                <div className="mt-10 w-full max-w-lg h-16 flex items-center justify-center gap-1">
-                  {[...Array(40)].map((_, i) => (
-                    <motion.div
-                      key={i}
-                      animate={{
-                        height: questionPhase === 'recording' ? [4, Math.random() * 40 + 4, 4] : 4,
-                        opacity: questionPhase === 'recording' ? 0.6 : 0.15,
-                      }}
-                      transition={{ duration: 0.5, repeat: Infinity, delay: i * 0.05 }}
-                      className="w-1 bg-emerald-500 rounded-full"
-                    />
-                  ))}
-                </div>
-
-                {/* Snapshot indicator */}
-                {assignment?.captureMode === 'Snapshot' && (
-                  <div className="absolute top-4 right-4 opacity-30">
-                    <Camera className="w-4 h-4 text-stone-600" />
+                {/* Submission extract (open questions) */}
+                {!isMcq && currentQ?.submissionExtract && (questionPhase === 'recording' || questionPhase === 'countdown') && (
+                  <div className="w-full bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4 text-left">
+                    <p className="text-xs font-bold text-amber-700 uppercase tracking-wide mb-1">From your submission</p>
+                    <p className="text-sm text-stone-700 italic leading-relaxed">"{currentQ.submissionExtract}"</p>
                   </div>
                 )}
+
+                {/* Question text (always visible during recording) */}
+                {(questionPhase === 'recording' || questionPhase === 'countdown') && currentQ && (
+                  <div className="w-full bg-stone-50 border border-stone-200 rounded-2xl p-4 mb-4 text-left">
+                    <p className="text-sm font-semibold text-stone-800 leading-relaxed">{currentQ.textEn}</p>
+                    {arabicEnabled && <p className="text-sm text-stone-600 mt-2 leading-relaxed text-right" dir="rtl">{currentQ.textAr}</p>}
+                  </div>
+                )}
+
+                {/* MCQ options */}
+                {isMcq && currentQ?.options && questionPhase === 'recording' && (
+                  <div className="w-full space-y-2 mb-4">
+                    <p className="text-xs text-amber-600 font-semibold text-center mb-2">
+                      Select your answer AND explain verbally — verbal explanation is required
+                    </p>
+                    {(['a', 'b', 'c', 'd'] as const).map(opt => (
+                      <button
+                        key={opt}
+                        onClick={() => setSelectedOption(opt)}
+                        className={cn(
+                          "w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all",
+                          selectedOption === opt
+                            ? "bg-emerald-600 text-white border-emerald-600 shadow-md"
+                            : "bg-white text-stone-700 border-stone-200 hover:border-emerald-300 hover:bg-emerald-50"
+                        )}
+                      >
+                        <span className="font-bold uppercase mr-2">{opt}.</span>
+                        {currentQ.options![opt]}
+                        {arabicEnabled && currentQ.options![`${opt}Ar` as keyof typeof currentQ.options] && (
+                          <span className="block text-xs mt-0.5 opacity-70 text-right" dir="rtl">
+                            {currentQ.options![`${opt}Ar` as keyof typeof currentQ.options]}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Real-time audio level meter */}
+                <div className="w-full max-w-md h-12 flex items-center justify-center gap-0.5 mt-2">
+                  {[...Array(40)].map((_, i) => {
+                    const center = 20;
+                    const dist = Math.abs(i - center) / center;
+                    const maxH = recordingAmplitude > 0
+                      ? Math.max(3, (recordingAmplitude / 255) * 44 * (1 - dist * 0.5))
+                      : 3;
+                    return (
+                      <div
+                        key={i}
+                        className={cn("w-1 rounded-full transition-all duration-75",
+                          questionPhase === 'recording' ? "bg-emerald-500" : "bg-stone-200")}
+                        style={{ height: `${questionPhase === 'recording' ? maxH : 3}px`, opacity: questionPhase === 'recording' ? 0.8 : 0.4 }}
+                      />
+                    );
+                  })}
+                </div>
               </div>
 
-              <div className="p-8 bg-stone-50 border-t border-stone-100 flex justify-center gap-4">
+              {/* Footer */}
+              <div className="px-8 py-5 bg-stone-50 border-t border-stone-100 flex justify-center">
                 <button
-                  disabled={questionPhase !== 'recording' || isUploading}
+                  disabled={questionPhase !== 'recording' || isUploading || (isMcq && !selectedOption)}
                   onClick={stopRecording}
-                  className="bg-stone-900 text-white px-12 py-4 rounded-2xl font-medium hover:bg-stone-800 shadow-lg shadow-stone-200 disabled:opacity-30 flex items-center gap-2"
+                  className="bg-stone-900 text-white px-10 py-3.5 rounded-2xl font-medium hover:bg-stone-800 shadow-lg shadow-stone-200 disabled:opacity-30 flex items-center gap-2 text-sm"
                 >
                   {isUploading && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Done, Next Question
+                  {isMcq && !selectedOption && questionPhase === 'recording' ? 'Select an option first' : 'Done, Next Question'}
                 </button>
               </div>
+
+              {/* canvas is rendered at top-level above AnimatePresence */}
             </div>
-          )}
+            );
+          })()}
 
           {/* ── Final Comment ─────────────────────────────────────────────────── */}
           {step === 'final-comment' && (
