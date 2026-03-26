@@ -58,6 +58,14 @@ export default function StudentPortal({ token }: Props) {
   const cameraStreamRef = useRef<MediaStream | null>(null); // holds stream until video element mounts
   const [micAmplitude, setMicAmplitude] = useState(0);
 
+  const videoCallbackRef = useCallback((node: HTMLVideoElement | null) => {
+    videoRef.current = node;
+    if (node && cameraStreamRef.current) {
+      node.srcObject = cameraStreamRef.current;
+      node.play().catch(() => {});
+    }
+  }, []);
+
   // ─── Detect test mode from URL ───────────────────────────────────────────────
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -370,13 +378,33 @@ export default function StudentPortal({ token }: Props) {
       const mcqQs = (assignment.questions || [])
         .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
         .map((q, i) => ({ ...q, id: q.id ?? String(3 + i), order: 3 + i }));
+      let finalMcqQs = mcqQs;
+      if (finalMcqQs.length === 0) {
+        try {
+          const mcqSnap = await getDocs(query(
+            collection(db, 'assignments', assignment.id, 'questions'),
+            orderBy('order', 'asc')
+          ));
+          finalMcqQs = mcqSnap.docs
+            .map((d, i) => ({ ...(d.data() as Question), id: d.id, order: 3 + i }));
+        } catch { /* subcollection may not exist */ }
+      }
       setQuestions([
         ...openWithOrders.map((q: Question, i: number) => ({ ...q, id: String(i) })),
-        ...mcqQs,
+        ...finalMcqQs,
       ]);
     } catch (genErr) {
-      // Non-fatal: if generation fails the student still gets the MCQ questions
       console.warn('[startInterview] Per-student question generation failed:', genErr);
+      // Fall back to MCQ-only
+      try {
+        const fallbackMcq = (assignment.questions || []).length > 0
+          ? (assignment.questions || [])
+              .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+              .map((q, i) => ({ ...q, id: q.id ?? String(i), order: i }))
+          : await getDocs(query(collection(db, 'assignments', assignment.id, 'questions'), orderBy('order', 'asc')))
+              .then(snap => snap.docs.map((d, i) => ({ ...(d.data() as Question), id: d.id, order: i })));
+        setQuestions(fallbackMcq);
+      } catch { /* no questions available */ }
     }
 
     // Start camera — store stream in ref; the video element only mounts after setStep('interview')
@@ -926,7 +954,7 @@ export default function StudentPortal({ token }: Props) {
                 {/* Live camera preview */}
                 <div className="flex items-center gap-3">
                   <div className="relative w-24 h-16 rounded-xl overflow-hidden bg-stone-900 border border-stone-200">
-                    <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
+                    <video ref={videoCallbackRef} autoPlay muted playsInline className="w-full h-full object-cover" />
                     <div className="absolute bottom-1 right-1">
                       <Camera className="w-3 h-3 text-white opacity-60" />
                     </div>
@@ -971,7 +999,7 @@ export default function StudentPortal({ token }: Props) {
                 </div>
 
                 {/* Submission extract (open questions) */}
-                {!isMcq && currentQ?.submissionExtract && (questionPhase === 'recording' || questionPhase === 'countdown') && (
+                {!isMcq && currentQ?.submissionExtract && questionPhase !== 'uploading' && (
                   <div className="w-full bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4 text-left">
                     <p className="text-xs font-bold text-amber-700 uppercase tracking-wide mb-1">From your submission</p>
                     <p className="text-sm text-stone-700 italic leading-relaxed">"{currentQ.submissionExtract}"</p>
@@ -979,7 +1007,7 @@ export default function StudentPortal({ token }: Props) {
                 )}
 
                 {/* Question text (always visible during recording) */}
-                {(questionPhase === 'recording' || questionPhase === 'countdown') && currentQ && (
+                {questionPhase !== 'uploading' && currentQ && (
                   <div className="w-full bg-stone-50 border border-stone-200 rounded-2xl p-4 mb-4 text-left">
                     <p className="text-sm font-semibold text-stone-800 leading-relaxed">{currentQ.textEn}</p>
                     {arabicEnabled && <p className="text-sm text-stone-600 mt-2 leading-relaxed text-right" dir="rtl">{currentQ.textAr}</p>}

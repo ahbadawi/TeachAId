@@ -71,9 +71,9 @@ app.post('/api/tts', async (req, res) => {
     input: { text },
     voice: {
       languageCode: isAr ? 'ar-XA' : 'en-US',
-      name:         isAr ? 'ar-XA-Neural2-D' : 'en-US-Neural2-J',
+      name:         isAr ? 'ar-XA-Neural2-B' : 'en-US-Neural2-J',
     },
-    audioConfig: { audioEncoding: 'MP3', speakingRate: 0.9 },
+    audioConfig: { audioEncoding: 'MP3', speakingRate: isAr ? 0.8 : 0.9 },
   };
 
   try {
@@ -387,6 +387,23 @@ app.post('/api/extract-text', async (req, res) => {
   }
 });
 
+// ─── Normalize rubric to markdown table ──────────────────────────────────────
+async function normalizeRubricToTable(rubricText: string): Promise<string> {
+  // Already a markdown table? Return as-is
+  const pipeLines = rubricText.split('\n').filter(l => l.includes('|')).length;
+  if (pipeLines >= 3) return rubricText;
+  // Convert plain text → markdown table
+  const result = await gemini('Rubric formatter.').generateContent(
+    `Convert the following grading rubric into a clean Markdown table.\n` +
+    `Use exactly these column headers: | Criterion | Excellent (90–100%) | Proficient (75–89%) | Developing (60–74%) | Needs Improvement (<60%) |\n` +
+    `Each row = one criterion. Include point weight in the Criterion cell.\n` +
+    `If the rubric doesn't map to exactly those bands, adapt the labels to match the rubric's own scale.\n` +
+    `Return ONLY the markdown table — no intro, no explanation, no code fences.\n\n` +
+    `Rubric to convert:\n${rubricText}`
+  );
+  return result.response.text().trim();
+}
+
 // ─── Generate assignment summary + generic questions ─────────────────────────
 app.post('/api/generate-assignment-summary', async (req, res) => {
   try {
@@ -395,6 +412,7 @@ app.post('/api/generate-assignment-summary', async (req, res) => {
     };
     if (!briefText) { res.status(400).json({ error: 'briefText required' }); return; }
     const effectiveRubric = await ensureRubric(briefText, rubricText);
+    const tableRubric = await normalizeRubricToTable(effectiveRubric);
 
     // Summary paragraph
     const summaryResult = await gemini('Academic assignment analyst.').generateContent(
@@ -410,7 +428,8 @@ app.post('/api/generate-assignment-summary', async (req, res) => {
       `- Each question is a simplified version of a core concept from the assignment\n` +
       `- 4 plausible options (a, b, c, d) — exactly one correct\n` +
       `- Questions test conceptual understanding, NOT factual recall\n` +
-      `- All text in both English and Arabic\n\n` +
+      `- All text in both English and Arabic\n` +
+      `- Arabic text must be concise, clear Modern Standard Arabic suitable for spoken TTS — use short sentences, avoid complex grammatical structures\n\n` +
       `Return a JSON array of exactly 3 objects. Each object:\n` +
       `{ "questionType": "mcq", "textEn": "...", "textAr": "...", "options": { "a": "...", "b": "...", "c": "...", "d": "...", "aAr": "...", "bAr": "...", "cAr": "...", "dAr": "..." }, "correctOption": "a"|"b"|"c"|"d", "order": 0|1|2 }\n` +
       `Return JSON array ONLY — no markdown, no explanation.`;
@@ -418,7 +437,7 @@ app.post('/api/generate-assignment-summary', async (req, res) => {
     const mcqResult = await gemini('Academic integrity interviewer.').generateContent(mcqPrompt);
     const mcqQuestions = JSON.parse(parseJsonResponse(mcqResult.response.text()));
 
-    res.json({ summaryText, questions: mcqQuestions, rubricText: effectiveRubric, rubricIsAiGenerated: !rubricText?.trim() });
+    res.json({ summaryText, questions: mcqQuestions, rubricText: tableRubric, rubricIsAiGenerated: !rubricText?.trim() });
   } catch (err: any) {
     console.error('/api/generate-assignment-summary error:', err);
     res.status(500).json({ error: 'Summary generation failed.', detail: String(err?.message || err) });
@@ -449,7 +468,8 @@ app.post('/api/generate-student-questions', async (req, res) => {
       `  (b) Answer a "what if" variant (e.g. "What would change if X were different?")\n` +
       `- Do NOT ask factual recall questions\n` +
       `- Set "submissionExtract" to the verbatim passage (in the original language)\n` +
-      `- All question text in both English and Arabic\n\n` +
+      `- All question text in both English and Arabic\n` +
+      `- Arabic text must be concise, clear Modern Standard Arabic suitable for spoken TTS — use short sentences, avoid complex grammatical structures\n\n` +
       `Return a JSON array of exactly 3 objects. Each object:\n` +
       `{ "questionType": "open", "textEn": "...", "textAr": "...", "submissionExtract": "...", "followUpEn": "...", "followUpAr": "...", "order": 0|1|2 }\n` +
       `Return JSON array ONLY — no markdown, no explanation.`;
@@ -490,8 +510,8 @@ app.post('/api/pregen-audio', async (req, res) => {
       const isAr = lang === 'ar';
       const payload = {
         input: { text },
-        voice: { languageCode: isAr ? 'ar-XA' : 'en-US', name: isAr ? 'ar-XA-Neural2-D' : 'en-US-Neural2-J' },
-        audioConfig: { audioEncoding: 'MP3', speakingRate: 0.9 },
+        voice: { languageCode: isAr ? 'ar-XA' : 'en-US', name: isAr ? 'ar-XA-Neural2-B' : 'en-US-Neural2-J' },
+        audioConfig: { audioEncoding: 'MP3', speakingRate: isAr ? 0.8 : 0.9 },
       };
       const r = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${ttsKey}`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });

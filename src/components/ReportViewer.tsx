@@ -368,7 +368,7 @@ export default function ReportViewer({ sessionId, onClose, onPrevStudent, onNext
         </div>
 
         <div className="space-y-8">
-          {assignment?.captureMode === 'Snapshot' && snapshots.length > 0 && (
+          {snapshots.length > 0 && (
             <section>
               <h3 className="text-lg font-medium text-stone-900 mb-4 flex items-center gap-2"><Camera className="w-5 h-5 text-stone-400" /> Snapshots</h3>
               <div className="grid grid-cols-3 gap-2">
