@@ -6,7 +6,7 @@ import {
 import { Assignment, Student, InterviewSession } from '../types';
 import {
   UserPlus, Mail, Link as LinkIcon, CheckCircle2, Clock,
-  AlertCircle, FileText, Loader2, X, Upload, Send, CheckSquare, Square, Download,
+  AlertCircle, FileText, Loader2, X, Upload, Send, CheckSquare, Square, Download, Cpu,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import ReportViewer from './ReportViewer';
@@ -32,6 +32,31 @@ export default function StudentList({ assignment, onClose }: Props) {
 
   // Email preview modal
   const [showEmailModal, setShowEmailModal] = useState(false);
+
+  // Bulk process state
+  const [processAllProgress, setProcessAllProgress] = useState<{ done: number; total: number } | null>(null);
+  const [processAllError, setProcessAllError] = useState<string | null>(null);
+
+  const handleProcessAll = async () => {
+    const pending = sessions.filter(s => s.status === 'AWAITING_PROCESSING');
+    if (pending.length === 0) return;
+    setProcessAllProgress({ done: 0, total: pending.length });
+    setProcessAllError(null);
+    let errors = 0;
+    for (let i = 0; i < pending.length; i++) {
+      try {
+        const r = await fetch('/api/process-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: pending[i].id }),
+        });
+        if (!r.ok) errors++;
+      } catch { errors++; }
+      setProcessAllProgress({ done: i + 1, total: pending.length });
+    }
+    if (errors > 0) setProcessAllError(`${errors} session(s) failed to process. Check server logs.`);
+    setTimeout(() => setProcessAllProgress(null), 3000);
+  };
 
   useEffect(() => {
     const qStudents = query(
@@ -104,6 +129,7 @@ export default function StudentList({ assignment, onClose }: Props) {
   const completedSessions = sessions.filter(s =>
     ['AWAITING_REVIEW', 'REVIEWED', 'AWAITING_PROCESSING', 'INCOMPLETE'].includes(s.status)
   ).length;
+  const pendingProcessing = sessions.filter(s => s.status === 'AWAITING_PROCESSING').length;
 
   const studentsWithSessions = students.filter(s => sessions.some(sess => sess.studentId === s.id));
 
@@ -172,6 +198,21 @@ export default function StudentList({ assignment, onClose }: Props) {
 
   return (
     <div className="space-y-6">
+      {/* Process-all progress banner */}
+      {processAllProgress && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 flex items-center gap-3">
+          <Loader2 className="w-4 h-4 text-amber-500 animate-spin shrink-0" />
+          <p className="text-sm text-amber-800 font-medium">
+            Processing sessions… {processAllProgress.done} / {processAllProgress.total}
+          </p>
+        </div>
+      )}
+      {processAllError && (
+        <div className="bg-red-50 border border-red-200 rounded-2xl px-4 py-3 text-sm text-red-700">
+          {processAllError}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -180,6 +221,16 @@ export default function StudentList({ assignment, onClose }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {pendingProcessing > 0 && (
+            <button
+              onClick={handleProcessAll}
+              disabled={!!processAllProgress}
+              className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-xl bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              {processAllProgress ? <Loader2 className="w-4 h-4 animate-spin" /> : <Cpu className="w-4 h-4" />}
+              Process All ({pendingProcessing})
+            </button>
+          )}
           <button
             onClick={() => setShowEmailModal(true)}
             disabled={checkedIds.size === 0}
