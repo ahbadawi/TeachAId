@@ -114,6 +114,28 @@ export function cancelSpeech(): void {
   }
 }
 
+// ─── Extract text from a local File object (student submission) ───────────────
+// Reads the file in the browser, encodes as base64, sends to server as JSON.
+// This avoids any Firebase Storage round-trip for files the student just selected.
+export async function extractTextFromFile(file: File): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const base64 = btoa(binary);
+  const res = await fetch(`${API_BASE}/extract-text`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: base64, mimeType: file.type || 'application/pdf' }),
+  });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error((errData as any).detail || (errData as any).error || 'Text extraction failed');
+  }
+  const data = await res.json();
+  return (data as any).text as string;
+}
+
 // ─── Extract text from a file URL (brief/rubric) ─────────────────────────────
 // Sends the Firebase Storage URL to the server so the server downloads the file
 // directly. This avoids browser CORS issues when fetching from Firebase Storage.

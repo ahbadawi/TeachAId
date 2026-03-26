@@ -125,6 +125,7 @@ export interface InterviewSession {
   arabicAudioEnabled: boolean;
   disruptionCause?: string;
   isTestMode?: boolean;
+  openQuestions?: Question[]; // per-student open questions generated from their submission
 }
 
 export interface MCQOptions {

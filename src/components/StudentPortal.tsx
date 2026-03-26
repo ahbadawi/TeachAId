@@ -37,7 +37,7 @@ export default function StudentPortal({ token }: Props) {
   const [isTestMode, setIsTestMode] = useState(false);
   const [consentChecked, setConsentChecked] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<'idle' | 'uploading' | 'done'>('idle');
+  const [uploadProgress, setUploadProgress] = useState<'idle' | 'uploading' | 'generating' | 'done'>('idle');
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [micStatus, setMicStatus] = useState<'testing' | 'pass' | 'fail'>('testing');
   const [questionPhase, setQuestionPhase] = useState<'playing' | 'countdown' | 'recording' | 'uploading'>('playing');
@@ -334,6 +334,49 @@ export default function StudentPortal({ token }: Props) {
     setSession(sessionData);
 
     await logAudit('Interview Started', `Student ${student.name} started interview for ${assignment.title}`, student.id, { isTestMode });
+
+    // ─── Generate per-student open questions from the uploaded submission ─────
+    // 3 open questions (from student's own text) go first (orders 0–2),
+    // then the 3 assignment-level MCQ questions (orders 3–5).
+    setUploadProgress('generating');
+    try {
+      const { extractTextFromFile, pregenAudio: pregenAudioFn } = await import('../lib/claude');
+      const submissionText = await extractTextFromFile(uploadedFile);
+
+      // Generate 3 open questions targeting passages in this student's submission
+      const qRes = await fetch('/api/generate-student-questions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          submissionText,
+          briefText: assignment.summaryText || assignment.title,
+          rubricText: assignment.rubricText || '',
+        }),
+      });
+      const { questions: rawOpenQs } = await qRes.json();
+
+      // Pre-generate audio — stored at sessions/{sessionId}/audio/q{n}_{en|ar}.mp3
+      const openQsWithAudio = await pregenAudioFn(
+        rawOpenQs,
+        `sessions/${sessionRef.id}/audio`
+      );
+
+      // Assign orders 0–2 and persist on the session doc
+      const openWithOrders = openQsWithAudio.map((q: Question, i: number) => ({ ...q, order: i }));
+      await updateDoc(doc(db, 'interviewSessions', sessionRef.id), { openQuestions: openWithOrders });
+
+      // Merge: open (0–2) + MCQ (3–5)
+      const mcqQs = (assignment.questions || [])
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+        .map((q, i) => ({ ...q, id: q.id ?? String(3 + i), order: 3 + i }));
+      setQuestions([
+        ...openWithOrders.map((q: Question, i: number) => ({ ...q, id: String(i) })),
+        ...mcqQs,
+      ]);
+    } catch (genErr) {
+      // Non-fatal: if generation fails the student still gets the MCQ questions
+      console.warn('[startInterview] Per-student question generation failed:', genErr);
+    }
 
     // Start camera — store stream in ref; the video element only mounts after setStep('interview')
     // so we apply srcObject in a useEffect once the DOM element is available.
@@ -845,11 +888,15 @@ export default function StudentPortal({ token }: Props) {
 
               <button
                 onClick={startInterview}
-                disabled={!uploadedFile || uploadProgress === 'uploading'}
+                disabled={!uploadedFile || uploadProgress === 'uploading' || uploadProgress === 'generating'}
                 className="w-full bg-stone-900 text-white py-4 rounded-2xl font-medium hover:bg-stone-800 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                {uploadProgress === 'uploading' && <Loader2 className="w-5 h-5 animate-spin" />}
-                {uploadProgress === 'uploading' ? 'Uploading...' : 'Start Interview'}
+                {(uploadProgress === 'uploading' || uploadProgress === 'generating') && (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                )}
+                {uploadProgress === 'uploading' ? 'Uploading…' :
+                 uploadProgress === 'generating' ? 'Preparing your questions… (~30s)' :
+                 'Start Interview'}
               </button>
             </motion.div>
           )}
