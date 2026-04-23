@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { db, storage } from '../firebase';
 import {
   doc, getDoc, collection, query, where, getDocs, updateDoc,
-  addDoc, serverTimestamp, orderBy
+  addDoc, serverTimestamp
 } from 'firebase/firestore';
 import { ref, uploadBytes } from 'firebase/storage';
 import { InterviewSession, Student, Assignment, Question } from '../types';
@@ -28,10 +28,8 @@ export default function StudentPortal({ token }: Props) {
   const [isBranchQuestion, setIsBranchQuestion] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [timeLeft, setTimeLeft] = useState(480); // 8 minutes for 6-question interview
-  const [selectedOption, setSelectedOption] = useState<'a' | 'b' | 'c' | 'd' | null>(null);
   const [recordingAmplitude, setRecordingAmplitude] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [arabicEnabled, setArabicEnabled] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [isTestMode, setIsTestMode] = useState(false);
@@ -138,29 +136,7 @@ export default function StudentPortal({ token }: Props) {
         setAssignment(assignmentData);
         setStudent({ id: studentDoc.id, ...studentDoc.data() } as Student);
         setTimeLeft(isTestMode ? 30 : 480); // 8 minutes for 6-question interview
-
-        // Load questions — prefer inline array on assignment doc (no subcollection permission needed),
-        // fall back to subcollection for backwards compatibility with older assignments.
-        const inlineQs: Question[] = assignmentData.questions || [];
-        if (inlineQs.length > 0) {
-          const sorted = [...inlineQs].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-          setQuestions(sorted.map((q, i) => ({ ...q, id: q.id ?? String(i) })));
-        } else {
-          const qDocs = await getDocs(
-            query(collection(db, 'assignments', assignmentDoc.id, 'questions'), orderBy('order'))
-          );
-          if (!qDocs.empty) {
-            setQuestions(qDocs.docs.map(d => ({ id: d.id, ...d.data() } as Question)));
-          } else {
-            // Fallback placeholder questions
-            setQuestions([
-              { id: '1', textEn: 'Please explain the main argument of your submission in your own words.', textAr: 'يرجى شرح الحجة الرئيسية لعملك بكلماتك الخاصة.', order: 0 },
-              { id: '2', textEn: 'What was the most challenging part of this assignment?', textAr: 'ما هو الجزء الأكثر تحديًا في هذا التكليف؟', order: 1 },
-              { id: '3', textEn: 'How did you select your primary sources?', textAr: 'كيف اخترت مصادرك الأولية؟', order: 2 },
-            ]);
-          }
-        }
-
+        // Questions are generated fresh from the student's submission in startInterview()
         setStep('consent');
       } catch (err) {
         console.error(err);
@@ -327,7 +303,6 @@ export default function StudentPortal({ token }: Props) {
       status: 'IN_PROGRESS',
       currentQuestionIndex: 0,
       startedAt: serverTimestamp(),
-      arabicAudioEnabled: arabicEnabled,
       isTestMode,
     });
 
@@ -338,21 +313,17 @@ export default function StudentPortal({ token }: Props) {
       studentId: student.id,
       assignmentId: assignment.id,
       submissionId: '',
-      arabicAudioEnabled: arabicEnabled,
     };
     setSession(sessionData);
 
     await logAudit('Interview Started', `Student ${student.name} started interview for ${assignment.title}`, student.id, { isTestMode });
 
-    // ─── Generate per-student open questions from the uploaded submission ─────
-    // 3 open questions (from student's own text) go first (orders 0–2),
-    // then the 3 assignment-level MCQ questions (orders 3–5).
+    // ─── Generate 6 per-student questions from the uploaded submission ────────
     setUploadProgress('generating');
     try {
       const { extractTextFromFile, pregenAudio: pregenAudioFn } = await import('../lib/claude');
       const submissionText = await extractTextFromFile(uploadedFile);
 
-      // Generate 3 open questions targeting passages in this student's submission
       const qRes = await fetch('/api/generate-student-questions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -362,53 +333,22 @@ export default function StudentPortal({ token }: Props) {
           rubricText: assignment.rubricText || '',
         }),
       });
-      const { questions: rawOpenQs } = await qRes.json();
-      if (!Array.isArray(rawOpenQs) || rawOpenQs.length === 0) throw new Error('No open questions returned');
+      const { questions: rawQs } = await qRes.json();
+      if (!Array.isArray(rawQs) || rawQs.length === 0) throw new Error('No questions returned');
 
-      // Pre-generate audio — non-fatal: if Firebase Storage is unavailable, questions still load
-      // and the interview falls back to browser TTS (speakText already has Web Speech API fallback)
-      let openQsWithAudio: Question[] = rawOpenQs;
+      // Pre-generate audio — non-fatal, falls back to browser TTS
+      let qsWithAudio: Question[] = rawQs;
       try {
-        openQsWithAudio = await pregenAudioFn(rawOpenQs, `sessions/${sessionRef.id}/audio`);
+        qsWithAudio = await pregenAudioFn(rawQs, `sessions/${sessionRef.id}/audio`);
       } catch (audioErr) {
-        console.warn('[startInterview] Audio pre-gen failed — interview will use browser TTS:', audioErr);
+        console.warn('[startInterview] Audio pre-gen failed — using browser TTS:', audioErr);
       }
 
-      // Assign orders 0–2 and persist on the session doc
-      const openWithOrders = openQsWithAudio.map((q: Question, i: number) => ({ ...q, order: i }));
-      await updateDoc(doc(db, 'interviewSessions', sessionRef.id), { openQuestions: openWithOrders });
-
-      // Merge: open (0–2) + MCQ (3–5)
-      const mcqQs = (assignment.questions || [])
-        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-        .map((q, i) => ({ ...q, id: q.id ?? String(3 + i), order: 3 + i }));
-      let finalMcqQs = mcqQs;
-      if (finalMcqQs.length === 0) {
-        try {
-          const mcqSnap = await getDocs(query(
-            collection(db, 'assignments', assignment.id, 'questions'),
-            orderBy('order', 'asc')
-          ));
-          finalMcqQs = mcqSnap.docs
-            .map((d, i) => ({ ...(d.data() as Question), id: d.id, order: 3 + i }));
-        } catch { /* subcollection may not exist */ }
-      }
-      setQuestions([
-        ...openWithOrders.map((q: Question, i: number) => ({ ...q, id: String(i) })),
-        ...finalMcqQs,
-      ]);
+      const questionsWithOrders = qsWithAudio.map((q: Question, i: number) => ({ ...q, order: i, id: String(i) }));
+      await updateDoc(doc(db, 'interviewSessions', sessionRef.id), { openQuestions: questionsWithOrders });
+      setQuestions(questionsWithOrders);
     } catch (genErr) {
-      console.warn('[startInterview] Per-student question generation failed:', genErr);
-      // Fall back to MCQ-only
-      try {
-        const fallbackMcq = (assignment.questions || []).length > 0
-          ? (assignment.questions || [])
-              .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-              .map((q, i) => ({ ...q, id: q.id ?? String(i), order: i }))
-          : await getDocs(query(collection(db, 'assignments', assignment.id, 'questions'), orderBy('order', 'asc')))
-              .then(snap => snap.docs.map((d, i) => ({ ...(d.data() as Question), id: d.id, order: i })));
-        setQuestions(fallbackMcq);
-      } catch { /* no questions available */ }
+      console.warn('[startInterview] Question generation failed:', genErr);
     }
 
     // Start camera — store stream in ref; the video element only mounts after setStep('interview')
@@ -443,28 +383,16 @@ export default function StudentPortal({ token }: Props) {
 
   const playQuestion = async (index: number, isBranch = false) => {
     setQuestionPhase('playing');
-    setSelectedOption(null); // reset MCQ selection for new question
     cancelSpeech();
 
     const q = questions[index];
 
     try {
       if (!isBranch && q.audioUrlEn) {
-        // Use pre-generated high-quality audio
         await playAudioUrl(q.audioUrlEn);
-        if (arabicEnabled && q.audioUrlAr) {
-          await new Promise(r => setTimeout(r, 1000));
-          await playAudioUrl(q.audioUrlAr);
-        }
       } else {
-        // Fall back to live TTS (branch questions or missing pre-gen audio)
         const text = isBranch ? (q.followUpEn || q.textEn) : q.textEn;
-        const textAr = isBranch ? (q.followUpAr || q.textAr) : q.textAr;
-        await speakText(text, 'en');
-        if (arabicEnabled) {
-          await new Promise(r => setTimeout(r, 2000));
-          await speakText(textAr, 'ar');
-        }
+        await speakText(text);
       }
     } catch {
       // TTS failure — continue anyway
@@ -559,7 +487,6 @@ export default function StudentPortal({ token }: Props) {
         timestamp: serverTimestamp(),
         duration,
         uploadConfirmedAt: serverTimestamp(),
-        ...(selectedOption ? { selectedOption } : {}),
       });
 
       // Snapshot at submission moment
@@ -589,11 +516,8 @@ export default function StudentPortal({ token }: Props) {
   const advanceAfterResponse = (duration: number) => {
     const MIN_DURATION = isTestMode ? 2 : 15;
     const currentQ = questions[currentQuestionIndex];
-    const isMcq = currentQ?.questionType === 'mcq';
 
-    // Branch logic skipped for MCQ questions (they always advance after one answer)
-    if (!isMcq && !isBranchQuestion && duration < MIN_DURATION && currentQ?.followUpEn) {
-      // Serve branch question
+    if (!isBranchQuestion && duration < MIN_DURATION && currentQ?.followUpEn) {
       setIsBranchQuestion(true);
       playQuestion(currentQuestionIndex, true);
       return;
@@ -614,10 +538,7 @@ export default function StudentPortal({ token }: Props) {
   const handleAllQuestionsAnswered = async () => {
     if (timerRef.current) clearInterval(timerRef.current);
     cancelSpeech();
-    await speakText('Thank you for completing the interview. Is there anything else you would like to add?', 'en');
-    if (arabicEnabled) {
-      await speakText('شكرًا لإتمامك المقابلة. هل هناك أي شيء آخر تود إضافته؟', 'ar');
-    }
+    await speakText('Thank you for completing the interview. Is there anything else you would like to add?');
     setStep('final-comment');
     startFinalRecording();
   };
@@ -902,25 +823,6 @@ export default function StudentPortal({ token }: Props) {
                 )}
               </label>
 
-              {/* Arabic language option */}
-              <div className="bg-stone-50 border border-stone-100 rounded-2xl p-4 mb-8">
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    id="arabic"
-                    checked={arabicEnabled}
-                    onChange={e => setArabicEnabled(e.target.checked)}
-                    className="mt-0.5 w-5 h-5 rounded border-stone-300 text-emerald-600 cursor-pointer"
-                  />
-                  <div>
-                    <p className="text-sm font-medium text-stone-800">Enable Arabic prompts</p>
-                    <p className="text-xs text-stone-500 mt-0.5 leading-relaxed">
-                      All interview questions are delivered in English. Enabling this adds an Arabic version of each question immediately after. You may answer in English, Arabic, or both.
-                    </p>
-                  </div>
-                </label>
-              </div>
-
               <button
                 onClick={startInterview}
                 disabled={!uploadedFile || uploadProgress === 'uploading' || uploadProgress === 'generating'}
@@ -939,7 +841,6 @@ export default function StudentPortal({ token }: Props) {
           {/* ── Interview ────────────────────────────────────────────────────── */}
           {step === 'interview' && (() => {
             const currentQ = questions[currentQuestionIndex];
-            const isMcq = currentQ?.questionType === 'mcq';
             return (
             <div className="max-w-3xl w-full bg-white rounded-[40px] shadow-2xl flex flex-col overflow-hidden border border-stone-100">
               {/* Header */}
@@ -949,7 +850,6 @@ export default function StudentPortal({ token }: Props) {
                     Q {currentQuestionIndex + 1}/{questions.length}
                     {isBranchQuestion && ' ↩'}
                   </span>
-                  {isMcq && <span className="px-3 py-1 bg-blue-50 text-blue-600 text-xs font-bold rounded-full uppercase tracking-wider">MCQ</span>}
                   <div className="flex items-center gap-1.5 text-red-500 font-mono text-sm">
                     <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
                     {formatDuration(timeLeft)}
@@ -1002,48 +902,18 @@ export default function StudentPortal({ token }: Props) {
                   </p>
                 </div>
 
-                {/* Submission extract (open questions) */}
-                {!isMcq && currentQ?.submissionExtract && questionPhase !== 'uploading' && (
+                {/* Submission extract */}
+                {currentQ?.submissionExtract && questionPhase !== 'uploading' && (
                   <div className="w-full bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4 text-left">
                     <p className="text-xs font-bold text-amber-700 uppercase tracking-wide mb-1">From your submission</p>
                     <p className="text-sm text-stone-700 italic leading-relaxed">"{currentQ.submissionExtract}"</p>
                   </div>
                 )}
 
-                {/* Question text (always visible during recording) */}
+                {/* Question text */}
                 {questionPhase !== 'uploading' && currentQ && (
                   <div className="w-full bg-stone-50 border border-stone-200 rounded-2xl p-4 mb-4 text-left">
                     <p className="text-sm font-semibold text-stone-800 leading-relaxed">{currentQ.textEn}</p>
-                    {arabicEnabled && <p className="text-sm text-stone-600 mt-2 leading-relaxed text-right" dir="rtl">{currentQ.textAr}</p>}
-                  </div>
-                )}
-
-                {/* MCQ options */}
-                {isMcq && currentQ?.options && questionPhase === 'recording' && (
-                  <div className="w-full space-y-2 mb-4">
-                    <p className="text-xs text-amber-600 font-semibold text-center mb-2">
-                      Select your answer AND explain verbally — verbal explanation is required
-                    </p>
-                    {(['a', 'b', 'c', 'd'] as const).map(opt => (
-                      <button
-                        key={opt}
-                        onClick={() => setSelectedOption(opt)}
-                        className={cn(
-                          "w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all",
-                          selectedOption === opt
-                            ? "bg-emerald-600 text-white border-emerald-600 shadow-md"
-                            : "bg-white text-stone-700 border-stone-200 hover:border-emerald-300 hover:bg-emerald-50"
-                        )}
-                      >
-                        <span className="font-bold uppercase mr-2">{opt}.</span>
-                        {currentQ.options![opt]}
-                        {arabicEnabled && currentQ.options![`${opt}Ar` as keyof typeof currentQ.options] && (
-                          <span className="block text-xs mt-0.5 opacity-70 text-right" dir="rtl">
-                            {currentQ.options![`${opt}Ar` as keyof typeof currentQ.options]}
-                          </span>
-                        )}
-                      </button>
-                    ))}
                   </div>
                 )}
 
@@ -1070,12 +940,12 @@ export default function StudentPortal({ token }: Props) {
               {/* Footer */}
               <div className="px-8 py-5 bg-stone-50 border-t border-stone-100 flex justify-center">
                 <button
-                  disabled={questionPhase !== 'recording' || isUploading || (isMcq && !selectedOption)}
+                  disabled={questionPhase !== 'recording' || isUploading}
                   onClick={stopRecording}
                   className="bg-stone-900 text-white px-10 py-3.5 rounded-2xl font-medium hover:bg-stone-800 shadow-lg shadow-stone-200 disabled:opacity-30 flex items-center gap-2 text-sm"
                 >
                   {isUploading && <Loader2 className="w-4 h-4 animate-spin" />}
-                  {isMcq && !selectedOption && questionPhase === 'recording' ? 'Select an option first' : 'Done, Next Question'}
+                  Done, Next Question
                 </button>
               </div>
 

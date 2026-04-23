@@ -1,14 +1,14 @@
 import { useState, useEffect } from 'react';
 import { db, storage } from '../firebase';
 import {
-  collection, onSnapshot, updateDoc, doc, addDoc,
-  serverTimestamp, getDocs, deleteDoc,
+  updateDoc, doc,
+  serverTimestamp,
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { Assignment, Course, Question } from '../types';
+import { Assignment, Course } from '../types';
 import {
   ArrowLeft, Edit3, Save, X, Upload, RefreshCw,
-  Loader2, FileText, Users,
+  Loader2, Users, Info,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { extractTextFromUrl, generateAssignmentSummary } from '../lib/claude';
@@ -43,10 +43,6 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
   const [summaryStep, setSummaryStep] = useState('');
   const [summaryError, setSummaryError] = useState('');
 
-  // Questions subcollection
-  const [questions, setQuestions] = useState<(Question & { id: string })[]>([]);
-  const [loadingQuestions, setLoadingQuestions] = useState(true);
-
   // Live assignment state (updated on Firestore changes)
   const [liveAssignment, setLiveAssignment] = useState(assignment);
 
@@ -61,29 +57,6 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
     setWindowClose(assignment.windowClose.slice(0, 16));
     setQuestionCount(assignment.questionCount);
   }, [assignment.id]);
-
-  // Load questions — prefer inline array on assignment doc (no subcollection needed)
-  useEffect(() => {
-    const inlineQs: Question[] = liveAssignment.questions || [];
-    if (inlineQs.length > 0) {
-      const sorted = [...inlineQs].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-      setQuestions(sorted.map((q, i) => ({ ...q, id: q.id ?? String(i) })));
-      setLoadingQuestions(false);
-    } else {
-      // Fall back to subcollection for older assignments
-      setLoadingQuestions(true);
-      const unsub = onSnapshot(
-        collection(db, 'assignments', liveAssignment.id, 'questions'),
-        snap => {
-          const qs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Question & { id: string }));
-          qs.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-          setQuestions(qs);
-          setLoadingQuestions(false);
-        }
-      );
-      return unsub;
-    }
-  }, [liveAssignment.id, liveAssignment.questions]);
 
   const saveEdits = async () => {
     setSaving(true);
@@ -141,11 +114,10 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
         liveAssignment.rubricFileUrl ? extractTextFromUrl(liveAssignment.rubricFileUrl) : Promise.resolve(''),
       ]);
       if (!briefText.trim()) throw new Error('Could not extract text from the brief file. Ensure it is a readable PDF, DOCX, or TXT.');
-      setSummaryStep(`Generating summary and ${liveAssignment.questionCount} questions with AI…`);
-      const { summaryText, questions: newQs, rubricText: effectiveRubric, rubricIsAiGenerated } =
-        await generateAssignmentSummary(briefText, rubricText, liveAssignment.questionCount);
+      setSummaryStep('Generating summary and rubric with AI…');
+      const { summaryText, rubricText: effectiveRubric, rubricIsAiGenerated } =
+        await generateAssignmentSummary(briefText, rubricText);
 
-      // Save summary + rubric to Firestore
       await updateDoc(doc(db, 'assignments', liveAssignment.id), {
         summaryText,
         rubricText: effectiveRubric,
@@ -155,35 +127,6 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
       setSummary(summaryText);
       setRubric(effectiveRubric);
       setLiveAssignment(prev => ({ ...prev, summaryText, rubricText: effectiveRubric, rubricIsAiGenerated }));
-
-      // Build questions array preserving all new fields (questionType, options, submissionExtract, etc.)
-      let questionsArray = newQs.map((q, i) => ({
-        questionType: (q.questionType || 'mcq') as 'open' | 'mcq',
-        textEn: q.textEn, textAr: q.textAr,
-        followUpEn: q.followUpEn || null, followUpAr: q.followUpAr || null,
-        submissionExtract: q.submissionExtract || null,
-        options: q.options || null,
-        correctOption: q.correctOption || null,
-        audioUrlEn: q.audioUrlEn || null,
-        audioUrlAr: q.audioUrlAr || null,
-        order: i,
-      }));
-
-      // Pre-generate TTS audio and store URLs
-      try {
-        setSummaryStep('Generating audio for questions (1M chars/month free)…');
-        const { pregenAudio } = await import('../lib/claude');
-        const withAudio = await pregenAudio(questionsArray as any, `assignments/${liveAssignment.id}/audio`);
-        questionsArray = withAudio.map((q, i) => ({ ...questionsArray[i], ...q })) as typeof questionsArray;
-      } catch (audioErr) {
-        console.warn('[AssignmentDetail] Audio pre-gen failed (questions saved without audio):', audioErr);
-      }
-
-      // Save questions inline on the assignment doc (avoids subcollection permission issues)
-      // questionCount = shared MCQ count + 3 per-student open questions
-      const totalCount = questionsArray.length + 3;
-      await updateDoc(doc(db, 'assignments', liveAssignment.id), { questions: questionsArray, questionCount: totalCount });
-      setLiveAssignment(prev => ({ ...prev, questions: questionsArray as any, questionCount: totalCount }));
     } catch (err: any) {
       setSummaryError(err?.message || 'Failed to generate summary.');
     } finally {
@@ -260,18 +203,8 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-xs font-medium text-stone-500 mb-1">Questions</label>
-            {editing ? (
-              <input type="number" min="4" max="20" value={questionCount}
-                onChange={e => setQuestionCount(parseInt(e.target.value))}
-                className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
-            ) : liveAssignment.questions?.length ? (
-              <div>
-                <p className="text-sm text-stone-700">{liveAssignment.questions.length + 3} total</p>
-                <p className="text-xs text-stone-400 mt-0.5">{liveAssignment.questions.length} shared MCQ + 3 per student</p>
-              </div>
-            ) : (
-              <p className="text-sm text-stone-700">{liveAssignment.questionCount}</p>
-            )}
+            <p className="text-sm text-stone-700">6 per student</p>
+            <p className="text-xs text-stone-400 mt-0.5">Generated from each submission</p>
           </div>
           <div>
             <label className="block text-xs font-medium text-stone-500 mb-1">Mode</label>
@@ -357,13 +290,13 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
         )}
       </div>
 
-      {/* Students / Questions tabs */}
+      {/* Students tab */}
       <div className="bg-white rounded-3xl border border-stone-200 overflow-hidden">
         <div className="flex border-b border-stone-100">
           <TabButton label="Students" icon={<Users className="w-4 h-4" />} active={tab === 'students'} onClick={() => setTab('students')} />
           <TabButton
-            label={`Shared MCQ${questions.length > 0 ? ` (${questions.length})` : ''}`}
-            icon={<FileText className="w-4 h-4" />}
+            label="Interview Structure"
+            icon={<Info className="w-4 h-4" />}
             active={tab === 'questions'}
             onClick={() => setTab('questions')}
           />
@@ -375,42 +308,23 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
           )}
           {tab === 'questions' && (
             <div className="space-y-3">
-              {loadingQuestions ? (
-                <div className="flex items-center gap-2 text-stone-400 text-sm">
-                  <Loader2 className="w-4 h-4 animate-spin" />Loading…
-                </div>
-              ) : questions.length === 0 ? (
-                <div className="py-6 text-center">
-                  <p className="text-sm text-stone-400 mb-3">No generic questions yet.</p>
-                  <button onClick={generateSummary} disabled={generatingSummary || !liveAssignment.briefFileUrl}
-                    className="flex items-center gap-2 text-sm text-emerald-600 hover:text-emerald-700 font-medium mx-auto disabled:opacity-40">
-                    {generatingSummary ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                    Generate from Brief
-                  </button>
-                </div>
-              ) : (
-                <>
-                  {questions.map((q, i) => (
-                    <div key={q.id} className="bg-stone-50 rounded-2xl p-4">
-                      <p className="text-[10px] text-stone-400 font-bold uppercase tracking-wider mb-1">Q{i + 1}</p>
-                      <p className="text-sm text-stone-800">{q.textEn}</p>
-                      {q.textAr && (
-                        <p className="text-xs text-stone-500 mt-1.5 text-right" dir="rtl">{q.textAr}</p>
-                      )}
-                      {q.followUpEn && (
-                        <p className="text-xs text-stone-400 mt-2 italic border-t border-stone-100 pt-2">
-                          ↳ {q.followUpEn}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                  <button onClick={generateSummary} disabled={generatingSummary || !liveAssignment.briefFileUrl}
-                    className="flex items-center gap-2 text-sm text-emerald-600 hover:text-emerald-700 font-medium mt-2 disabled:opacity-40">
-                    {generatingSummary ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                    Regenerate Questions from Brief
-                  </button>
-                </>
-              )}
+              <div className="bg-stone-50 rounded-2xl p-5 border border-stone-100">
+                <p className="text-sm font-semibold text-stone-800 mb-1">6 questions per student — all from their submission</p>
+                <p className="text-sm text-stone-500 leading-relaxed">
+                  Questions are generated fresh when each student starts their interview, targeting specific passages in their own uploaded submission.
+                  No questions are shared across students — each interview is unique.
+                </p>
+              </div>
+              <div className="bg-amber-50 rounded-2xl p-4 border border-amber-100">
+                <p className="text-xs font-bold text-amber-700 uppercase tracking-wide mb-1">How it works</p>
+                <ol className="text-xs text-stone-600 space-y-1 list-decimal list-inside leading-relaxed">
+                  <li>Student uploads their submission file</li>
+                  <li>AI reads the submission and selects 6 notable passages</li>
+                  <li>A question is generated for each passage (explain or "what if")</li>
+                  <li>The passage is shown on screen while the student answers</li>
+                  <li>Responses are recorded, transcribed, and analyzed for comprehension</li>
+                </ol>
+              </div>
             </div>
           )}
         </div>

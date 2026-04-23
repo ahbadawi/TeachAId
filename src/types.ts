@@ -50,10 +50,9 @@ export interface Assignment {
   captureMode: 'Snapshot' | 'Video';
   status: 'Draft' | 'Processing' | 'Ready' | 'Active' | 'Closed' | 'Archived';
   summaryText?: string;
-  rubricText?: string;     // effective rubric (provided or AI-generated) — stored for re-use at analysis time
-  rubricIsAiGenerated?: boolean; // true = Gemini-generated, false = educator-uploaded, undefined = unknown (legacy)
+  rubricText?: string;
+  rubricIsAiGenerated?: boolean;
   summaryGeneratedAt?: string;
-  questions?: Question[];  // stored inline on the assignment doc (avoids subcollection permission issues)
 }
 
 export interface Student {
@@ -85,7 +84,6 @@ export interface Submission {
   workFileUrl?: string;
   extractedText?: string;
   status: string;
-  arabicEnabled: boolean;
 }
 
 export interface InviteToken {
@@ -123,33 +121,19 @@ export interface InterviewSession {
   currentQuestionIndex: number;
   startedAt?: string;
   completedAt?: string;
-  arabicAudioEnabled: boolean;
   disruptionCause?: string;
   isTestMode?: boolean;
-  openQuestions?: Question[]; // per-student open questions generated from their submission
-}
-
-export interface MCQOptions {
-  a: string; b: string; c: string; d: string;
-  aAr?: string; bAr?: string; cAr?: string; dAr?: string;
+  openQuestions?: Question[];
 }
 
 export interface Question {
   id?: string;
   order: number;
-  questionType?: 'open' | 'mcq';   // 'open' if omitted (backwards compat)
+  questionType?: 'open';
   textEn: string;
-  textAr: string;
   followUpEn?: string | null;
-  followUpAr?: string | null;
-  // Open questions — excerpt from student's submission shown on screen
   submissionExtract?: string;
-  // MCQ questions — options + correct answer
-  options?: MCQOptions;
-  correctOption?: 'a' | 'b' | 'c' | 'd';
-  // Pre-generated audio stored in Firebase Storage
   audioUrlEn?: string;
-  audioUrlAr?: string;
 }
 
 export interface ResponseChunk {
@@ -164,7 +148,6 @@ export interface ResponseChunk {
   transcriptText?: string;
   transcriptLanguage?: string;
   transcriptConfidence?: number;
-  selectedOption?: 'a' | 'b' | 'c' | 'd'; // MCQ answer
 }
 
 export interface Snapshot {

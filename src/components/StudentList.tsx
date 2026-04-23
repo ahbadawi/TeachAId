@@ -33,30 +33,46 @@ export default function StudentList({ assignment, onClose }: Props) {
   // Email preview modal
   const [showEmailModal, setShowEmailModal] = useState(false);
 
-  // Bulk process state
-  const [processAllProgress, setProcessAllProgress] = useState<{ done: number; total: number } | null>(null);
-  const [processAllError, setProcessAllError] = useState<string | null>(null);
+  // Batch processing state
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number; failed: number; status: string } | null>(null);
+  const [batchError, setBatchError] = useState<string | null>(null);
 
   const handleProcessAll = async () => {
-    const pending = sessions.filter(s => s.status === 'AWAITING_PROCESSING');
-    if (pending.length === 0) return;
-    setProcessAllProgress({ done: 0, total: pending.length });
-    setProcessAllError(null);
-    let errors = 0;
-    for (let i = 0; i < pending.length; i++) {
-      try {
-        const r = await fetch('/api/process-session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId: pending[i].id }),
-        });
-        if (!r.ok) errors++;
-      } catch { errors++; }
-      setProcessAllProgress({ done: i + 1, total: pending.length });
+    setBatchError(null);
+    try {
+      const r = await fetch('/api/batch-process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assignmentId: assignment.id }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Failed to start batch processing');
+      if (!data.batchId) return; // nothing pending
+      setBatchId(data.batchId);
+      setBatchProgress({ done: 0, total: data.total, failed: 0, status: 'running' });
+    } catch (err: any) {
+      setBatchError(err.message);
     }
-    if (errors > 0) setProcessAllError(`${errors} session(s) failed to process. Check server logs.`);
-    setTimeout(() => setProcessAllProgress(null), 3000);
   };
+
+  // Poll batch status every 5s while running
+  useEffect(() => {
+    if (!batchId || batchProgress?.status === 'complete') return;
+    const iv = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/batch-status/${batchId}`);
+        if (!r.ok) return;
+        const data = await r.json();
+        setBatchProgress({ done: data.done ?? 0, total: data.total ?? 0, failed: data.failed ?? 0, status: data.status ?? 'running' });
+        if (data.status === 'complete') {
+          clearInterval(iv);
+          if (data.failed > 0) setBatchError(`${data.failed} session(s) failed. Check server logs.`);
+        }
+      } catch { /* ignore polling errors */ }
+    }, 5000);
+    return () => clearInterval(iv);
+  }, [batchId, batchProgress?.status]);
 
   useEffect(() => {
     const qStudents = query(
@@ -198,18 +214,22 @@ export default function StudentList({ assignment, onClose }: Props) {
 
   return (
     <div className="space-y-6">
-      {/* Process-all progress banner */}
-      {processAllProgress && (
+      {/* Batch processing progress banner */}
+      {batchProgress && (
         <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 flex items-center gap-3">
-          <Loader2 className="w-4 h-4 text-amber-500 animate-spin shrink-0" />
+          {batchProgress.status === 'complete'
+            ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+            : <Loader2 className="w-4 h-4 text-amber-500 animate-spin shrink-0" />}
           <p className="text-sm text-amber-800 font-medium">
-            Processing sessions… {processAllProgress.done} / {processAllProgress.total}
+            {batchProgress.status === 'complete'
+              ? `Batch complete — ${batchProgress.done} processed, ${batchProgress.failed} failed`
+              : `Processing sessions… ${batchProgress.done} / ${batchProgress.total}`}
           </p>
         </div>
       )}
-      {processAllError && (
+      {batchError && (
         <div className="bg-red-50 border border-red-200 rounded-2xl px-4 py-3 text-sm text-red-700">
-          {processAllError}
+          {batchError}
         </div>
       )}
 
@@ -224,10 +244,10 @@ export default function StudentList({ assignment, onClose }: Props) {
           {pendingProcessing > 0 && (
             <button
               onClick={handleProcessAll}
-              disabled={!!processAllProgress}
+              disabled={!!(batchProgress && batchProgress.status !== 'complete')}
               className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-xl bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
             >
-              {processAllProgress ? <Loader2 className="w-4 h-4 animate-spin" /> : <Cpu className="w-4 h-4" />}
+              {batchProgress && batchProgress.status !== 'complete' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Cpu className="w-4 h-4" />}
               Process All ({pendingProcessing})
             </button>
           )}

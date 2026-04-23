@@ -5,16 +5,11 @@ const API_BASE = '/api';
 
 export interface GeneratedQuestion {
   textEn: string;
-  textAr: string;
   order: number;
   followUpEn?: string | null;
-  followUpAr?: string | null;
-  questionType?: 'open' | 'mcq';
+  questionType?: 'open';
   submissionExtract?: string;
-  options?: { a: string; b: string; c: string; d: string; aAr?: string; bAr?: string; cAr?: string; dAr?: string };
-  correctOption?: 'a' | 'b' | 'c' | 'd';
   audioUrlEn?: string;
-  audioUrlAr?: string;
 }
 
 export interface SessionAnalysis {
@@ -70,11 +65,11 @@ export async function analyzeSession(
 // Falls back to Web Speech API automatically when the server returns 503
 // (no TTS server configured) or is unreachable.
 
-function speakWithBrowser(text: string, lang: 'en' | 'ar'): Promise<void> {
+function speakWithBrowser(text: string): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!('speechSynthesis' in window)) { resolve(); return; }
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang === 'ar' ? 'ar-SA' : 'en-US';
+    utterance.lang = 'en-US';
     utterance.rate = 0.9;
     utterance.onend = () => resolve();
     utterance.onerror = () => reject(new Error('Browser TTS error'));
@@ -82,13 +77,12 @@ function speakWithBrowser(text: string, lang: 'en' | 'ar'): Promise<void> {
   });
 }
 
-export async function speakText(text: string, lang: 'en' | 'ar' = 'en'): Promise<void> {
-  // Try server TTS first — gets the high-quality XTTS-V2 or Kokoro voice when available
+export async function speakText(text: string): Promise<void> {
   try {
     const res = await fetch(`${API_BASE}/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, lang }),
+      body: JSON.stringify({ text }),
       signal: AbortSignal.timeout(15_000),
     });
     if (res.ok) {
@@ -101,11 +95,10 @@ export async function speakText(text: string, lang: 'en' | 'ar' = 'en'): Promise
         audio.play().catch(reject);
       });
     }
-    // 503 = no server TTS configured → fall through to browser
   } catch {
     // Server unreachable → fall through to browser
   }
-  return speakWithBrowser(text, lang);
+  return speakWithBrowser(text);
 }
 
 export function cancelSpeech(): void {
@@ -153,14 +146,14 @@ export async function extractTextFromUrl(url: string): Promise<string> {
   return (data as any).text as string;
 }
 
-// ─── Generate assignment summary + generic questions ─────────────────────────
+// ─── Generate assignment summary + rubric ────────────────────────────────────
 export async function generateAssignmentSummary(
-  briefText: string, rubricText: string, questionCount: number
-): Promise<{ summaryText: string; questions: GeneratedQuestion[]; rubricText: string; rubricIsAiGenerated: boolean }> {
+  briefText: string, rubricText: string
+): Promise<{ summaryText: string; rubricText: string; rubricIsAiGenerated: boolean }> {
   const res = await fetch(`${API_BASE}/generate-assignment-summary`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ briefText, rubricText, questionCount }),
+    body: JSON.stringify({ briefText, rubricText }),
   });
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
@@ -168,7 +161,7 @@ export async function generateAssignmentSummary(
       (errData as any).detail || (errData as any).error || `Summary generation failed (${res.status})`
     );
   }
-  return res.json() as Promise<{ summaryText: string; questions: GeneratedQuestion[]; rubricText: string; rubricIsAiGenerated: boolean }>;
+  return res.json() as Promise<{ summaryText: string; rubricText: string; rubricIsAiGenerated: boolean }>;
 }
 
 // ─── Generate per-student questions from their submission ─────────────────────
