@@ -3,6 +3,26 @@
 
 const API_BASE = '/api';
 
+const SLOW_THRESHOLD_MS = 8_000;
+
+// Fires a 'slow-api' CustomEvent on window when a fetch takes > 8 s (Render cold-start).
+// Fires 'slow-api-done' when it completes so the UI can dismiss the banner.
+async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    window.dispatchEvent(new CustomEvent('slow-api'));
+  }, SLOW_THRESHOLD_MS);
+
+  try {
+    const res = await fetch(url, init);
+    return res;
+  } finally {
+    clearTimeout(timer);
+    if (timedOut) window.dispatchEvent(new CustomEvent('slow-api-done'));
+  }
+}
+
 export interface GeneratedQuestion {
   textEn: string;
   order: number;
@@ -30,7 +50,7 @@ export async function generateQuestions(
   submissionText: string,
   count = 12
 ): Promise<GeneratedQuestion[]> {
-  const res = await fetch(`${API_BASE}/generate-questions`, {
+  const res = await apiFetch(`${API_BASE}/generate-questions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ briefText, rubricText, submissionText, count }),
@@ -48,7 +68,7 @@ export async function analyzeSession(
   submissionText: string,
   rubricText: string
 ): Promise<SessionAnalysis> {
-  const res = await fetch(`${API_BASE}/analyze-session`, {
+  const res = await apiFetch(`${API_BASE}/analyze-session`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ transcript, submissionText, rubricText }),
@@ -116,7 +136,7 @@ export async function extractTextFromFile(file: File): Promise<string> {
   let binary = '';
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
   const base64 = btoa(binary);
-  const res = await fetch(`${API_BASE}/extract-text`, {
+  const res = await apiFetch(`${API_BASE}/extract-text`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ data: base64, mimeType: file.type || 'application/pdf' }),
@@ -133,7 +153,7 @@ export async function extractTextFromFile(file: File): Promise<string> {
 // Sends the Firebase Storage URL to the server so the server downloads the file
 // directly. This avoids browser CORS issues when fetching from Firebase Storage.
 export async function extractTextFromUrl(url: string): Promise<string> {
-  const res = await fetch(`${API_BASE}/extract-text`, {
+  const res = await apiFetch(`${API_BASE}/extract-text`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),
@@ -150,7 +170,7 @@ export async function extractTextFromUrl(url: string): Promise<string> {
 export async function generateAssignmentSummary(
   briefText: string, rubricText: string
 ): Promise<{ summaryText: string; rubricText: string; rubricIsAiGenerated: boolean }> {
-  const res = await fetch(`${API_BASE}/generate-assignment-summary`, {
+  const res = await apiFetch(`${API_BASE}/generate-assignment-summary`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ briefText, rubricText }),
@@ -169,7 +189,7 @@ export async function generateStudentQuestions(
   submissionText: string, briefText: string, rubricText: string,
   genericQuestions: GeneratedQuestion[], courseOutline?: string, count = 8
 ): Promise<GeneratedQuestion[]> {
-  const res = await fetch(`${API_BASE}/generate-student-questions`, {
+  const res = await apiFetch(`${API_BASE}/generate-student-questions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ submissionText, briefText, rubricText, genericQuestions, courseOutline, count }),
@@ -184,7 +204,7 @@ export async function pregenAudio(
   questions: GeneratedQuestion[],
   storagePath: string
 ): Promise<GeneratedQuestion[]> {
-  const res = await fetch(`${API_BASE}/pregen-audio`, {
+  const res = await apiFetch(`${API_BASE}/pregen-audio`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ questions, storagePath }),
@@ -217,7 +237,7 @@ export async function sendInvites(
   invites: InvitePayload[], assignmentTitle: string, subject: string, body: string,
   fromAccount?: string
 ): Promise<{ studentId: string; status: 'sent' | 'failed'; error?: string }[]> {
-  const res = await fetch(`${API_BASE}/send-invites`, {
+  const res = await apiFetch(`${API_BASE}/send-invites`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ invites, assignmentTitle, subject, body, fromAccount }),

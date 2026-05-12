@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { db, auth } from '../firebase';
 import { collection, query, where, onSnapshot, doc, updateDoc, getDocs } from 'firebase/firestore';
 import { Educator, Course, Assignment, InterviewSession } from '../types';
-import { Plus, BookOpen, ClipboardList, LogOut, Search, Bell, Loader2, History, FileText, ShieldCheck, Settings } from 'lucide-react';
+import { Plus, BookOpen, ClipboardList, LogOut, Search, Bell, Loader2, History, FileText, ShieldCheck, Settings, BarChart2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import CreateAssignment from './CreateAssignment';
@@ -11,6 +11,8 @@ import CourseDetail from './CourseDetail';
 import AssignmentDetail from './AssignmentDetail';
 import AuditLogs from './AuditLogs';
 import AdminPanel from './AdminPanel';
+import AnalyticsView from './AnalyticsView';
+import ErrorBoundary from './ErrorBoundary';
 
 interface Props {
   educator: Educator;
@@ -38,7 +40,7 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
   const [courses, setCourses] = useState<Course[]>(isDev ? DEV_COURSES : []);
   const [assignments, setAssignments] = useState<Assignment[]>(isDev ? DEV_ASSIGNMENTS : []);
   const [sessions, setSessions] = useState<InterviewSession[]>(isDev ? DEV_SESSIONS : []);
-  const [activeTab, setActiveTab] = useState<'overview' | 'assignments' | 'courses' | 'logs' | 'admin' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'assignments' | 'courses' | 'analytics' | 'logs' | 'admin' | 'settings'>('overview');
   const [showCreateAssignment, setShowCreateAssignment] = useState(false);
   const [showCreateCourse, setShowCreateCourse] = useState(false);
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
@@ -126,6 +128,9 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
           <NavItem icon={<BookOpen className="w-5 h-5" />} label="Courses"
             active={activeTab === 'courses'}
             onClick={() => setActiveTab('courses')} />
+          <NavItem icon={<BarChart2 className="w-5 h-5" />} label="Analytics"
+            active={activeTab === 'analytics'}
+            onClick={() => setActiveTab('analytics')} />
           {educator.role === 'Admin' && (
             <NavItem icon={<History className="w-5 h-5" />} label="Audit Logs"
               active={activeTab === 'logs'}
@@ -197,6 +202,7 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
               <Loader2 className="w-8 h-8 animate-spin text-stone-300" />
             </div>
           ) : (
+            <ErrorBoundary>
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
 
               {/* ── OVERVIEW ── */}
@@ -355,56 +361,23 @@ export default function EducatorDashboard({ educator, onSignOut }: Props) {
                 )
               )}
 
+              {activeTab === 'analytics' && (
+                <AnalyticsView
+                  assignments={assignments}
+                  sessions={sessions}
+                  courses={courses}
+                />
+              )}
+
               {activeTab === 'logs' && <AuditLogs />}
               {activeTab === 'admin' && (
                 <AdminPanel educatorId={educator.id} institutionId={educator.institutionId} />
               )}
               {activeTab === 'settings' && (
-                <div className="max-w-2xl space-y-8">
-                  <div>
-                    <h2 className="text-xl font-semibold text-stone-900 mb-1">Settings</h2>
-                    <p className="text-sm text-stone-500">Platform defaults for new assignments. Individual assignments can override these.</p>
-                  </div>
-
-                  <div className="bg-white rounded-2xl border border-stone-200 divide-y divide-stone-100">
-                    <div className="p-5">
-                      <h3 className="text-sm font-semibold text-stone-700 mb-4">Assignment Defaults</h3>
-                      <div className="space-y-4">
-                        <div>
-                          <label className="block text-sm text-stone-600 mb-1">Default Question Count</label>
-                          <p className="text-xs text-stone-400">Set per assignment when creating. Default: 12.</p>
-                        </div>
-                        <div>
-                          <label className="block text-sm text-stone-600 mb-1">Default Response Time</label>
-                          <p className="text-xs text-stone-400">Set per assignment when creating. Default: 90s.</p>
-                        </div>
-                        <div>
-                          <label className="block text-sm text-stone-600 mb-1">Default Capture Mode</label>
-                          <p className="text-xs text-stone-400">Snapshot captures periodic images. Video records full session.</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="p-5">
-                      <h3 className="text-sm font-semibold text-stone-700 mb-4">Testing Mode</h3>
-                      <p className="text-sm text-stone-600 mb-2">
-                        Reduces interview timers for testing purposes. Append <code className="bg-stone-100 px-1.5 py-0.5 rounded text-xs font-mono">?test=true</code> to the student link to activate.
-                      </p>
-                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700">
-                        Testing mode is URL-based. Share links with <code className="font-mono">?test=true</code> only with testers — never real students.
-                      </div>
-                    </div>
-
-                    <div className="p-5">
-                      <h3 className="text-sm font-semibold text-stone-700 mb-4">Data & Privacy</h3>
-                      <p className="text-sm text-stone-600">
-                        Session recordings, snapshots, and transcripts are stored in Firebase Storage and Firestore under your institution. Contact your administrator to configure retention policies.
-                      </p>
-                    </div>
-                  </div>
-                </div>
+                <SettingsPanel />
               )}
             </motion.div>
+            </ErrorBoundary>
           )}
         </div>
       </main>
@@ -489,6 +462,82 @@ function AssignmentCard({ assignment, stats, courseName, studentCount }: {
       <div className="mt-2 pt-3 border-t border-stone-50 flex justify-between items-center">
         <span className={cn('text-xs', dueDate && dueDate < now ? 'text-red-400' : 'text-stone-400')}>{dueLabel}</span>
         <span className="text-xs font-medium text-emerald-600">View Details</span>
+      </div>
+    </div>
+  );
+}
+
+const SETTINGS_KEY = 'teachaid_settings';
+
+function loadSettings() {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; }
+}
+
+function SettingsPanel() {
+  const saved = loadSettings();
+  const [questionCount, setQuestionCount] = useState<number>(saved.questionCount ?? 6);
+  const [responseTime, setResponseTime]   = useState<number>(saved.responseTime ?? 90);
+  const [captureMode, setCaptureMode]     = useState<'Snapshot' | 'Video'>(saved.captureMode ?? 'Snapshot');
+  const [saved2, setSaved2] = useState(false);
+
+  const save = () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ questionCount, responseTime, captureMode }));
+    setSaved2(true);
+    setTimeout(() => setSaved2(false), 2000);
+  };
+
+  return (
+    <div className="max-w-2xl space-y-8">
+      <div>
+        <h2 className="text-xl font-semibold text-stone-900 mb-1">Settings</h2>
+        <p className="text-sm text-stone-500">Default values pre-filled when creating new assignments.</p>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-stone-200 divide-y divide-stone-100">
+        <div className="p-5 space-y-5">
+          <h3 className="text-sm font-semibold text-stone-700">Assignment Defaults</h3>
+          <div>
+            <label className="block text-sm text-stone-600 mb-2">Default Question Count</label>
+            <input type="number" min={3} max={12} value={questionCount}
+              onChange={e => setQuestionCount(Number(e.target.value))}
+              className="w-24 px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
+          </div>
+          <div>
+            <label className="block text-sm text-stone-600 mb-2">Default Response Time (seconds)</label>
+            <input type="number" min={30} max={180} step={15} value={responseTime}
+              onChange={e => setResponseTime(Number(e.target.value))}
+              className="w-24 px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500" />
+          </div>
+          <div>
+            <label className="block text-sm text-stone-600 mb-2">Default Capture Mode</label>
+            <select value={captureMode} onChange={e => setCaptureMode(e.target.value as 'Snapshot' | 'Video')}
+              className="px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500">
+              <option value="Snapshot">Snapshot</option>
+              <option value="Video">Video</option>
+            </select>
+          </div>
+          <button onClick={save}
+            className="flex items-center gap-2 text-sm font-medium bg-emerald-600 text-white px-4 py-2 rounded-xl hover:bg-emerald-700 transition-colors">
+            {saved2 ? '✓ Saved' : 'Save Defaults'}
+          </button>
+        </div>
+
+        <div className="p-5">
+          <h3 className="text-sm font-semibold text-stone-700 mb-3">Testing Mode</h3>
+          <p className="text-sm text-stone-600 mb-2">
+            Reduces interview timers for testing. Append <code className="bg-stone-100 px-1.5 py-0.5 rounded text-xs font-mono">?test=true</code> to a student link.
+          </p>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700">
+            Never share <code className="font-mono">?test=true</code> links with real students.
+          </div>
+        </div>
+
+        <div className="p-5">
+          <h3 className="text-sm font-semibold text-stone-700 mb-2">Data & Privacy</h3>
+          <p className="text-sm text-stone-600">
+            Session recordings, snapshots, and transcripts are stored in Firebase Storage and Firestore.
+          </p>
+        </div>
       </div>
     </div>
   );

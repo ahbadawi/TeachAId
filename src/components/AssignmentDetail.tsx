@@ -27,8 +27,8 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
 
   // Editable fields
   const [title, setTitle] = useState(assignment.title);
-  const [windowOpen, setWindowOpen] = useState(assignment.windowOpen.slice(0, 16));
-  const [windowClose, setWindowClose] = useState(assignment.windowClose.slice(0, 16));
+  const [windowOpen, setWindowOpen] = useState((assignment.windowOpen || '').slice(0, 16));
+  const [windowClose, setWindowClose] = useState((assignment.windowClose || '').slice(0, 16));
   const [questionCount, setQuestionCount] = useState(assignment.questionCount);
   const [saving, setSaving] = useState(false);
 
@@ -53,8 +53,8 @@ export default function AssignmentDetail({ assignment, courses, onBack, onAssign
     setLiveAssignment(assignment);
     setSummary(assignment.summaryText || '');
     setTitle(assignment.title);
-    setWindowOpen(assignment.windowOpen.slice(0, 16));
-    setWindowClose(assignment.windowClose.slice(0, 16));
+    setWindowOpen((assignment.windowOpen || '').slice(0, 16));
+    setWindowClose((assignment.windowClose || '').slice(0, 16));
     setQuestionCount(assignment.questionCount);
   }, [assignment.id]);
 

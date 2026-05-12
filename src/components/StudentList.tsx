@@ -233,6 +233,31 @@ export default function StudentList({ assignment, onClose }: Props) {
         </div>
       )}
 
+      {/* Awaiting review nudge */}
+      {(() => {
+        const awaitingReview = sessions.filter(s => s.status === 'AWAITING_REVIEW').length;
+        if (!awaitingReview || batchProgress) return null;
+        return (
+          <div className="bg-sky-50 border border-sky-200 rounded-2xl px-4 py-3 flex items-center justify-between gap-3">
+            <p className="text-sm text-sky-800 font-medium">
+              {awaitingReview} session{awaitingReview > 1 ? 's' : ''} ready for your review
+            </p>
+            <button
+              onClick={() => {
+                const first = studentsWithSessions.find(s => {
+                  const sess = sessions.find(se => se.studentId === s.id);
+                  return sess?.status === 'AWAITING_REVIEW';
+                });
+                if (first) openReport(first, studentsWithSessions.indexOf(first));
+              }}
+              className="shrink-0 text-xs font-semibold text-sky-700 bg-sky-100 hover:bg-sky-200 px-3 py-1.5 rounded-lg transition-colors"
+            >
+              Review Now →
+            </button>
+          </div>
+        );
+      })()}
+
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>

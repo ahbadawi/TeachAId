@@ -17,6 +17,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<'educator' | 'student'>('educator');
   const [studentToken, setStudentToken] = useState<string | null>(null);
+  const [slowApi, setSlowApi] = useState(false);
 
   const handleSignOut = () => {
     localStorage.removeItem('teachaid_dev_session');
@@ -63,6 +64,14 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const show = () => setSlowApi(true);
+    const hide = () => setSlowApi(false);
+    window.addEventListener('slow-api', show);
+    window.addEventListener('slow-api-done', hide);
+    return () => { window.removeEventListener('slow-api', show); window.removeEventListener('slow-api-done', hide); };
+  }, []);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-stone-50">
@@ -91,5 +100,16 @@ export default function App() {
     );
   }
 
-  return <EducatorDashboard educator={educator} onSignOut={handleSignOut} />;
+  return (
+    <>
+      {slowApi && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-stone-900 text-white text-sm px-5 py-3 rounded-2xl shadow-xl">
+          <Loader2 className="w-4 h-4 animate-spin text-emerald-400 shrink-0" />
+          Server is waking up, please wait…
+          <button onClick={() => setSlowApi(false)} className="text-stone-400 hover:text-white ml-1">✕</button>
+        </div>
+      )}
+      <EducatorDashboard educator={educator} onSignOut={handleSignOut} />
+    </>
+  );
 }

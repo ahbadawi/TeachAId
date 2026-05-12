@@ -3,6 +3,7 @@ import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { LogIn, ShieldCheck, FlaskConical } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Educator } from '../types';
+import { LAST_UPDATED } from '../version';
 
 interface Props {
   onDevLogin?: (educator: Educator) => void;
@@ -66,7 +67,7 @@ export default function Auth({ onDevLogin }: Props) {
             Educator & Admin Access Only
           </p>
           <p className="text-[10px] text-stone-300">
-            {new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}
+            Last updated {LAST_UPDATED}
           </p>
         </div>
       </motion.div>

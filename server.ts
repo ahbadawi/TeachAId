@@ -53,6 +53,33 @@ function parseJsonResponse(text: string) {
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
+// ─── Firebase Admin (shared) ───────────────────────────────────────────────────
+// Lazily initialises once; returns Firestore + Storage handles every call.
+async function getAdminServices() {
+  const { initializeApp, getApps, cert } = await import('firebase-admin/app');
+  const { getFirestore }                  = await import('firebase-admin/firestore');
+  const { getStorage }                    = await import('firebase-admin/storage');
+
+  if (!getApps().length) {
+    const raw = (process.env.FIREBASE_SERVICE_ACCOUNT || '').trim().replace(/^['"`]|['"`]$/g, '');
+    if (!raw) throw new Error('FIREBASE_SERVICE_ACCOUNT env var is not set — Firebase Admin cannot start');
+
+    let sa: object | null = null;
+    try { sa = JSON.parse(raw); } catch { /* not plain JSON, try base64 */ }
+    if (!sa) {
+      try { sa = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')); } catch { /* not base64 either */ }
+    }
+    if (!sa) throw new Error('FIREBASE_SERVICE_ACCOUNT is not valid JSON or base64-JSON — fix in Render env vars');
+
+    initializeApp({
+      credential: cert(sa as any),
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'ai-studio-applet-webapp-3bc9d.firebasestorage.app',
+    });
+  }
+
+  return { fsAdmin: getFirestore(), bucket: getStorage().bucket() };
+}
+
 // ─── TTS — Google Cloud Text-to-Speech Neural2 (English only) ────────────────
 app.post('/api/tts', async (req, res) => {
   const { text } = req.body as { text: string };
@@ -472,22 +499,7 @@ app.post('/api/pregen-audio', async (req, res) => {
     const ttsKey = process.env.GOOGLE_TTS_KEY || '';
     if (!ttsKey) { res.status(503).json({ error: 'GOOGLE_TTS_KEY not configured' }); return; }
 
-    // Lazy-init Firebase Admin for Storage uploads
-    const { initializeApp, getApps, cert } = await import('firebase-admin/app');
-    const { getStorage } = await import('firebase-admin/storage');
-    if (!getApps().length) {
-      // Parse service account — handles plain JSON, JSON wrapped in quotes, or base64-encoded JSON
-      const raw = (process.env.FIREBASE_SERVICE_ACCOUNT || '').trim().replace(/^['"`]|['"`]$/g, '');
-      let sa: object = {};
-      try { sa = JSON.parse(raw); } catch {
-        try { sa = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')); } catch {
-          console.error('[pregen-audio] FIREBASE_SERVICE_ACCOUNT is not valid JSON or base64-JSON — Storage uploads will fail');
-        }
-      }
-      initializeApp({ credential: cert(sa as any),
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'ai-studio-applet-webapp-3bc9d.firebasestorage.app' });
-    }
-    const bucket = getStorage().bucket();
+    const { bucket } = await getAdminServices();
 
     async function synthesiseEn(text: string): Promise<Buffer> {
       const payload = {
@@ -702,23 +714,7 @@ app.post('/api/process-session', async (req, res) => {
   if (!sessionId) { res.status(400).json({ error: 'sessionId required' }); return; }
 
   try {
-    // Lazy-init Firebase Admin
-    const { initializeApp, getApps, cert } = await import('firebase-admin/app');
-    const { getFirestore }                  = await import('firebase-admin/firestore');
-    const { getStorage }                    = await import('firebase-admin/storage');
-    if (!getApps().length) {
-      const raw = (process.env.FIREBASE_SERVICE_ACCOUNT || '').trim().replace(/^['"`]|['"`]$/g, '');
-      let sa: object = {};
-      try { sa = JSON.parse(raw); } catch {
-        try { sa = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')); } catch {
-          console.error('[process-session] FIREBASE_SERVICE_ACCOUNT is not valid JSON or base64-JSON');
-        }
-      }
-      initializeApp({ credential: cert(sa as any),
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'ai-studio-applet-webapp-3bc9d.firebasestorage.app' });
-    }
-    const fsAdmin = getFirestore();
-    const bucket  = getStorage().bucket();
+    const { fsAdmin, bucket } = await getAdminServices();
 
     // Load session + assignment + response chunks in parallel
     const sessionDoc = await fsAdmin.collection('interviewSessions').doc(sessionId).get();
@@ -827,22 +823,8 @@ app.post('/api/batch-process', async (req, res) => {
   if (!assignmentId) { res.status(400).json({ error: 'assignmentId required' }); return; }
 
   try {
-    const { initializeApp, getApps, cert } = await import('firebase-admin/app');
-    const { getFirestore, FieldValue }      = await import('firebase-admin/firestore');
-    const { getStorage }                    = await import('firebase-admin/storage');
-    if (!getApps().length) {
-      const raw = (process.env.FIREBASE_SERVICE_ACCOUNT || '').trim().replace(/^['"`]|['"`]$/g, '');
-      let sa: object = {};
-      try { sa = JSON.parse(raw); } catch {
-        try { sa = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')); } catch {
-          console.error('[batch-process] FIREBASE_SERVICE_ACCOUNT invalid');
-        }
-      }
-      initializeApp({ credential: cert(sa as any),
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'ai-studio-applet-webapp-3bc9d.firebasestorage.app' });
-    }
-    const fsAdmin = getFirestore();
-    const bucket  = getStorage().bucket();
+    const { FieldValue } = await import('firebase-admin/firestore');
+    const { fsAdmin, bucket } = await getAdminServices();
 
     const snap = await fsAdmin.collection('interviewSessions')
       .where('assignmentId', '==', assignmentId)
@@ -943,18 +925,7 @@ app.post('/api/batch-process', async (req, res) => {
 
 app.get('/api/batch-status/:batchId', async (req, res) => {
   try {
-    const { initializeApp, getApps, cert } = await import('firebase-admin/app');
-    const { getFirestore }                  = await import('firebase-admin/firestore');
-    if (!getApps().length) {
-      const raw = (process.env.FIREBASE_SERVICE_ACCOUNT || '').trim().replace(/^['"`]|['"`]$/g, '');
-      let sa: object = {};
-      try { sa = JSON.parse(raw); } catch {
-        try { sa = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')); } catch {}
-      }
-      initializeApp({ credential: cert(sa as any),
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'ai-studio-applet-webapp-3bc9d.firebasestorage.app' });
-    }
-    const fsAdmin = getFirestore();
+    const { fsAdmin } = await getAdminServices();
     const batchDoc = await fsAdmin.collection('batchJobs').doc(req.params.batchId).get();
     if (!batchDoc.exists) { res.status(404).json({ error: 'Batch not found' }); return; }
     res.json(batchDoc.data());

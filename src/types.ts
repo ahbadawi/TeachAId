@@ -124,6 +124,9 @@ export interface InterviewSession {
   disruptionCause?: string;
   isTestMode?: boolean;
   openQuestions?: Question[];
+  grade?: string;
+  flagged?: boolean;
+  arabicAudioEnabled?: boolean;
 }
 
 export interface Question {
