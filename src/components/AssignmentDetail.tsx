@@ -8,7 +8,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { Assignment, Course } from '../types';
 import {
   ArrowLeft, Edit3, Save, X, Upload, RefreshCw,
-  Loader2, Users, Info,
+  Loader2, Users, Info, FileText,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { extractTextFromUrl, generateAssignmentSummary } from '../lib/claude';
